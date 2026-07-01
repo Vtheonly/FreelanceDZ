@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DZ Sales Intelligence — Dashboard</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --bg-elev: #1e293b;
+            --bg-elev2: #334155;
+            --fg: #e2e8f0;
+            --fg-muted: #94a3b8;
+            --accent: #06b6d4;
+            --accent2: #8b5cf6;
+            --green: #10b981;
+            --yellow: #f59e0b;
+            --red: #ef4444;
+            --border: #334155;
+            --radius: 12px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+            padding: 24px;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        h1 {
+            font-size: 28px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 800;
+        }
+        h1 small {
+            display: block;
+            font-size: 13px;
+            color: var(--fg-muted);
+            font-weight: 400;
+            margin-top: 4px;
+            -webkit-text-fill-color: var(--fg-muted);
+        }
+        .actions { display: flex; gap: 8px; }
+        .btn {
+            background: var(--bg-elev);
+            color: var(--fg);
+            border: 1px solid var(--border);
+            padding: 8px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all .15s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn:hover { background: var(--bg-elev2); border-color: var(--accent); }
+        .btn-primary { background: var(--accent); color: white; border: none; }
+        .btn-primary:hover { background: #0891b2; }
+
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+        .stat-card {
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            padding: 18px;
+            border-radius: var(--radius);
+        }
+        .stat-card .label {
+            font-size: 12px;
+            color: var(--fg-muted);
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            margin-bottom: 6px;
+        }
+        .stat-card .value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .stat-card .value.green { color: var(--green); }
+        .stat-card .value.yellow { color: var(--yellow); }
+
+        /* Filters bar */
+        .filters {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .filters input, .filters select {
+            background: var(--bg-elev);
+            color: var(--fg);
+            border: 1px solid var(--border);
+            padding: 9px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            min-width: 140px;
+        }
+        .filters input:focus, .filters select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .filters input[type="text"] { flex: 1; min-width: 220px; }
+
+        /* Leads table */
+        .leads-wrap {
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th {
+            text-align: left;
+            padding: 12px 14px;
+            background: var(--bg-elev2);
+            color: var(--fg-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: .5px;
+            position: sticky;
+            top: 0;
+        }
+        td { padding: 12px 14px; border-top: 1px solid var(--border); }
+        tr:hover td { background: rgba(6, 182, 212, .05); cursor: pointer; }
+        tr.selected td { background: rgba(6, 182, 212, .12); }
+
+        .score {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 12px;
+            min-width: 38px;
+            text-align: center;
+        }
+        .score-high { background: rgba(16, 185, 129, .2); color: var(--green); }
+        .score-mid  { background: rgba(245, 158, 11, .2); color: var(--yellow); }
+        .score-low  { background: rgba(239, 68, 68, .2); color: var(--red); }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .3px;
+        }
+        .badge-yes { background: rgba(16, 185, 129, .15); color: var(--green); }
+        .badge-no  { background: rgba(239, 68, 68, .15); color: var(--red); }
+        .badge-source { background: rgba(139, 92, 246, .15); color: var(--accent2); }
+        .badge-status-discovered { background: rgba(148, 163, 184, .15); color: var(--fg-muted); }
+        .badge-status-analyzed { background: rgba(6, 182, 212, .15); color: var(--accent); }
+        .badge-status-scored { background: rgba(16, 185, 129, .15); color: var(--green); }
+        .badge-status-contacted { background: rgba(245, 158, 11, .15); color: var(--yellow); }
+        .badge-status-rejected { background: rgba(239, 68, 68, .15); color: var(--red); }
+
+        /* Lead detail panel */
+        .detail-panel {
+            position: fixed;
+            top: 0; right: 0;
+            width: 480px;
+            height: 100vh;
+            background: var(--bg-elev);
+            border-left: 1px solid var(--border);
+            padding: 28px;
+            overflow-y: auto;
+            transform: translateX(100%);
+            transition: transform .25s ease;
+            z-index: 100;
+            box-shadow: -10px 0 30px rgba(0,0,0,.3);
+        }
+        .detail-panel.open { transform: translateX(0); }
+        .detail-panel h2 {
+            font-size: 22px;
+            margin-bottom: 4px;
+            color: var(--fg);
+        }
+        .detail-panel .meta { color: var(--fg-muted); font-size: 13px; margin-bottom: 16px; }
+        .detail-panel section { margin-top: 22px; }
+        .detail-panel h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: var(--accent);
+            letter-spacing: .5px;
+            margin-bottom: 8px;
+        }
+        .detail-panel ul { list-style: none; padding: 0; }
+        .detail-panel li {
+            padding: 8px 12px;
+            background: var(--bg);
+            border-radius: 8px;
+            margin-bottom: 6px;
+            font-size: 13px;
+            border-left: 3px solid var(--accent);
+        }
+        .detail-panel .solution {
+            padding: 10px 12px;
+            background: var(--bg);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--green);
+        }
+        .detail-panel .solution .name { font-weight: 600; color: var(--green); }
+        .detail-panel .solution .price { float: right; color: var(--yellow); font-weight: 700; }
+        .detail-panel .solution .justification { font-size: 12px; color: var(--fg-muted); margin-top: 4px; }
+        .close-btn {
+            position: absolute;
+            top: 18px; right: 18px;
+            background: var(--bg-elev2);
+            color: var(--fg);
+            border: none;
+            width: 32px; height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .close-btn:hover { background: var(--red); }
+        .empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--fg-muted);
+        }
+        .loading { text-align: center; padding: 40px; color: var(--fg-muted); }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>
+        DZ Sales Intelligence
+        <small>AI-powered business discovery &amp; lead scoring for Algeria 🇩🇿</small>
+    </h1>
+    <div class="actions">
+        <a class="btn" href="/api/stats" target="_blank">/api/stats</a>
+        <a class="btn" href="/api/leads?limit=100" target="_blank">/api/leads</a>
+        <button class="btn btn-primary" onclick="refresh()">↻ Refresh</button>
+    </div>
+</header>
+
+<!-- Stats grid -->
+<div class="stats-grid" id="stats">
+    <div class="stat-card"><div class="label">Total Leads</div><div class="value" id="stat-total">—</div></div>
+    <div class="stat-card"><div class="label">Analyzed</div><div class="value green" id="stat-analyzed">—</div></div>
+    <div class="stat-card"><div class="label">Scored</div><div class="value" id="stat-scored">—</div></div>
+    <div class="stat-card"><div class="label">Unanalyzed</div><div class="value yellow" id="stat-unanalyzed">—</div></div>
+    <div class="stat-card"><div class="label">Avg. Score</div><div class="value" id="stat-avg">—</div></div>
+    <div class="stat-card"><div class="label">Est. Pipeline (USD)</div><div class="value green" id="stat-pipeline">—</div></div>
+</div>
+
+<!-- Filters -->
+<div class="filters">
+    <input type="text" id="search" placeholder="Search by name, industry, wilaya, phone..." oninput="onSearchInput()">
+    <select id="filter-wilaya" onchange="reloadLeads()"><option value="">All Wilayas</option></select>
+    <select id="filter-industry" onchange="reloadLeads()"><option value="">All Industries</option></select>
+    <select id="filter-min-score" onchange="reloadLeads()">
+        <option value="0">Any score</option>
+        <option value="30">≥ 30</option>
+        <option value="50">≥ 50</option>
+        <option value="70">≥ 70</option>
+    </select>
+    <select id="filter-limit" onchange="reloadLeads()">
+        <option value="50">50 per page</option>
+        <option value="100">100 per page</option>
+        <option value="200">200 per page</option>
+    </select>
+</div>
+
+<!-- Leads table -->
+<div class="leads-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Score</th>
+                <th>Business</th>
+                <th>Industry</th>
+                <th>Wilaya</th>
+                <th>Web</th>
+                <th>Reviews</th>
+                <th>Est. $</th>
+                <th>Source</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody id="leads-tbody">
+            <tr><td colspan="10" class="loading">Loading…</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Detail panel -->
+<div class="detail-panel" id="detail-panel">
+    <button class="close-btn" onclick="closeDetail()">×</button>
+    <div id="detail-content"></div>
+</div>
+
+<script>
+const API = '';
+let allLeads = [];
+let searchTimer = null;
+
+function scoreClass(s) {
+    if (s >= 60) return 'score-high';
+    if (s >= 35) return 'score-mid';
+    return 'score-low';
+}
+function fmtMoney(n) {
+    if (!n && n !== 0) return '—';
+    return '$' + Number(n).toLocaleString();
+}
+
+async function loadStats() {
+    const r = await fetch(API + '/api/stats');
+    const s = await r.json();
+    document.getElementById('stat-total').textContent = s.total_leads;
+    document.getElementById('stat-analyzed').textContent = s.analyzed_leads;
+    document.getElementById('stat-scored').textContent = s.scored_leads;
+    document.getElementById('stat-unanalyzed').textContent = s.unanalyzed_leads;
+    document.getElementById('stat-avg').textContent = s.average_score.toFixed(1);
+    document.getElementById('stat-pipeline').textContent = fmtMoney(s.estimated_pipeline_usd);
+
+    // Populate wilaya filter
+    const wSel = document.getElementById('filter-wilaya');
+    s.top_wilayas.forEach(w => {
+        const opt = document.createElement('option');
+        opt.value = w.wilaya; opt.textContent = `${w.wilaya} (${w.count})`;
+        wSel.appendChild(opt);
+    });
+    // Populate industry filter
+    const iSel = document.getElementById('filter-industry');
+    s.top_industries.forEach(i => {
+        const opt = document.createElement('option');
+        opt.value = i.industry; opt.textContent = `${i.industry} (${i.count})`;
+        iSel.appendChild(opt);
+    });
+}
+
+async function reloadLeads() {
+    const params = new URLSearchParams();
+    const w = document.getElementById('filter-wilaya').value;
+    const i = document.getElementById('filter-industry').value;
+    const ms = document.getElementById('filter-min-score').value;
+    const limit = document.getElementById('filter-limit').value;
+    if (w) params.set('wilaya', w);
+    if (i) params.set('industry', i);
+    params.set('min_score', ms);
+    params.set('limit', limit);
+    params.set('offset', '0');
+
+    const r = await fetch(API + '/api/leads?' + params.toString());
+    const data = await r.json();
+    allLeads = data.leads;
+    renderLeads(allLeads);
+}
+
+function renderLeads(leads) {
+    const tbody = document.getElementById('leads-tbody');
+    if (!leads.length) {
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">No leads match these filters.<br>Try running <code>python cli.py discover --query "restaurant"</code> first.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = leads.map((l, idx) => `
+        <tr onclick="openDetail(${l.id})">
+            <td style="color:var(--fg-muted)">${idx + 1}</td>
+            <td><span class="score ${scoreClass(l.priority_score)}">${l.priority_score.toFixed(1)}</span></td>
+            <td><strong>${escapeHtml(l.name)}</strong></td>
+            <td>${escapeHtml(l.industry)}</td>
+            <td>${escapeHtml(l.wilaya)}</td>
+            <td>${l.website ? '<span class="badge badge-yes">YES</span>' : '<span class="badge badge-no">NO</span>'}</td>
+            <td>${l.review_count}</td>
+            <td style="color:var(--yellow); font-weight:600">${fmtMoney(l.estimated_value_usd)}</td>
+            <td><span class="badge badge-source">${l.source}</span></td>
+            <td><span class="badge badge-status-${l.status}">${l.status}</span></td>
+        </tr>
+    `).join('');
+}
+
+async function openDetail(id) {
+    const r = await fetch(API + '/api/leads/' + id);
+    if (!r.ok) { alert('Lead not found'); return; }
+    const l = await r.json();
+    const c = document.getElementById('detail-content');
+
+    let html = `
+        <h2>${escapeHtml(l.name)}</h2>
+        <div class="meta">${escapeHtml(l.industry)} · ${escapeHtml(l.wilaya)} · Score ${l.priority_score.toFixed(1)}/100</div>
+
+        <section>
+            <h3>Contact</h3>
+            <ul>
+                ${l.phone ? `<li>📞 ${escapeHtml(l.phone)}</li>` : ''}
+                ${l.email ? `<li>✉️ ${escapeHtml(l.email)}</li>` : ''}
+                ${l.address ? `<li>📍 ${escapeHtml(l.address)}</li>` : ''}
+                ${l.website ? `<li>🌐 <a href="${escapeHtml(l.website)}" target="_blank" style="color:var(--accent)">${escapeHtml(l.website)}</a></li>` : '<li>🌐 No website</li>'}
+                ${(l.social_media || []).map(s => `<li>👥 <a href="${escapeHtml(s)}" target="_blank" style="color:var(--accent)">${escapeHtml(s)}</a></li>`).join('')}
+            </ul>
+        </section>
+    `;
+
+    if (l.analysis) {
+        html += `
+            <section>
+                <h3>Digital Presence Score</h3>
+                <div style="font-size:24px; font-weight:700; color:${l.analysis.digital_presence_score >= 60 ? 'var(--green)' : l.analysis.digital_presence_score >= 30 ? 'var(--yellow)' : 'var(--red)'}">${l.analysis.digital_presence_score}/100</div>
+            </section>
+
+            ${l.analysis.pain_points && l.analysis.pain_points.length ? `
+                <section>
+                    <h3>Operational Pain Points</h3>
+                    <ul>
+                        ${l.analysis.pain_points.map(p => `<li>${escapeHtml(p)}</li>`).join('')}
+                    </ul>
+                </section>
+            ` : ''}
+
+            ${l.analysis.recommended_solutions && l.analysis.recommended_solutions.length ? `
+                <section>
+                    <h3>Recommended Software Solutions</h3>
+                    ${l.analysis.recommended_solutions.map(s => `
+                        <div class="solution">
+                            <div class="name">${escapeHtml(s.service_name)} <span class="price">${fmtMoney(s.estimated_value_usd)}</span></div>
+                            <div class="justification">${escapeHtml(s.justification)}</div>
+                            ${s.priority ? `<div class="justification">Priority: ${s.priority}/10</div>` : ''}
+                        </div>
+                    `).join('')}
+                </section>
+            ` : ''}
+
+            ${l.analysis.pitch_angles && l.analysis.pitch_angles.length ? `
+                <section>
+                    <h3>Sales Pitch Angles</h3>
+                    <ul>
+                        ${l.analysis.pitch_angles.map(p => `<li>${escapeHtml(p)}</li>`).join('')}
+                    </ul>
+                </section>
+            ` : ''}
+
+            <section>
+                <h3>Analysis Meta</h3>
+                <ul>
+                    <li>Model: ${escapeHtml(l.analysis.analysis_model || 'unknown')}</li>
+                    <li>From cache: ${l.analysis.from_cache ? '✓' : '✗'}</li>
+                    ${l.analysis.analyzed_at ? `<li>Analyzed at: ${new Date(l.analysis.analyzed_at).toLocaleString()}</li>` : ''}
+                </ul>
+            </section>
+        `;
+    } else {
+        html += `<section><h3>Not yet analyzed</h3><p style="color:var(--fg-muted)">Run <code>python cli.py analyze</code> to generate AI analysis for this lead.</p></section>`;
+    }
+
+    // Status controls
+    html += `
+        <section>
+            <h3>Update Status</h3>
+            <div style="display:flex; gap:6px; flex-wrap:wrap">
+                ${['discovered', 'analyzed', 'scored', 'contacted', 'rejected'].map(st => `
+                    <button class="btn" onclick="updateStatus(${l.id}, '${st}')" ${st === l.status ? 'disabled style="opacity:.5"' : ''}>${st}</button>
+                `).join('')}
+            </div>
+        </section>
+    `;
+
+    c.innerHTML = html;
+    document.getElementById('detail-panel').classList.add('open');
+}
+
+function closeDetail() {
+    document.getElementById('detail-panel').classList.remove('open');
+}
+
+async function updateStatus(id, status) {
+    const r = await fetch(API + '/api/leads/' + id + '/status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status}),
+    });
+    if (r.ok) {
+        closeDetail();
+        await reloadLeads();
+        await loadStats();
+    } else {
+        alert('Failed to update status');
+    }
+}
+
+function onSearchInput() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(doSearch, 250);
+}
+
+async function doSearch() {
+    const q = document.getElementById('search').value.trim();
+    if (!q) {
+        await reloadLeads();
+        return;
+    }
+    const r = await fetch(API + '/api/search?q=' + encodeURIComponent(q) + '&limit=50');
+    const data = await r.json();
+    allLeads = data.leads;
+    renderLeads(allLeads);
+}
+
+function escapeHtml(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function refresh() {
+    loadStats();
+    reloadLeads();
+}
+
+// Initial load
+refresh();
+</script>
+
+</body>
+</html>

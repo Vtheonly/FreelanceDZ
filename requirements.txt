@@ -1,0 +1,29 @@
+# ============================================================
+# DZ Sales Intelligence - Python Dependencies
+# ============================================================
+
+# --- Pydantic for data validation & settings ---
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+
+# --- HTTP client for scrapers & LLM APIs ---
+requests>=2.31.0
+urllib3>=2.0.0
+
+# --- CLI ---
+click>=8.1.7
+
+# --- Storage ---
+# sqlite3 is part of the standard library - no external dep needed.
+
+# --- Logging / utilities ---
+python-dotenv>=1.0.0
+tenacity>=8.2.3       # Robust retry/backoff primitives
+
+# --- Optional: lightweight web dashboard ---
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+jinja2>=3.1.3
+
+# --- Optional: richer console output (CLI tables) ---
+rich>=13.7.0
