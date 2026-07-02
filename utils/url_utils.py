@@ -57,16 +57,22 @@ def unwrap_ddg_url(raw_url: str) -> str:
     """Extract the real target URL from a DuckDuckGo redirect.
 
     DDG wraps external links like:
-    ``//duckduckgo.com/l/?uddg=<URL>&rut=...`` — we pull the ``uddg``
-    parameter and URL-decode it.
+    ``//duckduckgo.com/l/?uddg=<URL>&rut=...`` or relative link `/l/?uddg=...`
+    — we pull the ``uddg`` parameter and URL-decode it.
     """
     if not raw_url:
         return ""
+    
+    # Handle protocol-relative and path-relative URLs
     if raw_url.startswith("//"):
         raw_url = "https:" + raw_url
+    elif raw_url.startswith("/"):
+        raw_url = "https://duckduckgo.com" + raw_url
+        
     parsed = urlparse(raw_url)
     if "duckduckgo.com" not in parsed.netloc:
         return clean_url(raw_url)
+        
     qs = parse_qs(parsed.query)
     if "uddg" in qs and qs["uddg"]:
         return clean_url(unquote(qs["uddg"][0]))

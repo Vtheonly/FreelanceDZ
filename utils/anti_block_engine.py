@@ -70,7 +70,8 @@ class CrawlerAntiBlockEngine:
             "User-Agent": user_agent,
             "Accept": accept,
             "Accept-Language": HTTP_ACCEPT_LANGUAGE,
-            "Accept-Encoding": "gzip, deflate, br",
+            # Let the HTTP client manage Accept-Encoding automatically
+            # based on installed packages to avoid decompression errors.
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
             "Sec-Fetch-Dest": "document",

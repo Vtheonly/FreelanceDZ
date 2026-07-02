@@ -1,12 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FreelanceDZ // Sourcing Workspace</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
     <style>
         :root {
             --bg-workspace: #080a10;
@@ -25,12 +28,17 @@
             --font-mono: 'JetBrains Mono', monospace;
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
         body {
             font-family: var(--font-jakarta);
             background-color: var(--bg-workspace);
             color: var(--text-primary);
+            height: 100vh;
             min-height: 100vh;
             display: flex;
             flex-direction: column;
@@ -45,6 +53,7 @@
             align-items: center;
             background-color: var(--bg-panel-2);
             flex-shrink: 0;
+            height: 55px;
         }
 
         header .brand {
@@ -81,6 +90,7 @@
             border-bottom: 1px solid var(--border-primary);
             padding: 0 32px;
             flex-shrink: 0;
+            height: 55px;
         }
 
         .stat-cell {
@@ -89,7 +99,9 @@
             border-right: 1px solid var(--border-primary);
         }
 
-        .stat-cell:last-child { border-right: none; }
+        .stat-cell:last-child {
+            border-right: none;
+        }
 
         .stat-label {
             font-size: 10px;
@@ -107,14 +119,23 @@
             margin-top: 2px;
         }
 
-        .stat-value.accent { color: var(--accent-glow); }
-        .stat-value.success { color: var(--accent-emerald); }
-        .stat-value.warn { color: var(--accent-amber); }
+        .stat-value.accent {
+            color: var(--accent-glow);
+        }
+
+        .stat-value.success {
+            color: var(--accent-emerald);
+        }
+
+        .stat-value.warn {
+            color: var(--accent-amber);
+        }
 
         .workspace-grid {
             display: grid;
             grid-template-columns: 1fr 420px;
             flex: 1;
+            height: calc(100vh - 110px);
             min-height: 0;
         }
 
@@ -122,6 +143,9 @@
             padding: 20px 24px;
             overflow-y: auto;
             border-right: 1px solid var(--border-primary);
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
         }
 
         .lineage-sidebar {
@@ -131,6 +155,7 @@
             display: flex;
             flex-direction: column;
             gap: 16px;
+            height: 100%;
         }
 
         .toolbar {
@@ -138,9 +163,11 @@
             gap: 8px;
             margin-bottom: 16px;
             align-items: center;
+            flex-shrink: 0;
         }
 
-        .search-input, .select-input {
+        .search-input,
+        .select-input {
             background-color: #161b2c;
             border: 1px solid var(--border-primary);
             color: var(--text-primary);
@@ -152,10 +179,16 @@
             transition: border-color 0.15s;
         }
 
-        .search-input { flex: 1; }
-        .select-input { min-width: 140px; }
+        .search-input {
+            flex: 1;
+        }
 
-        .search-input:focus, .select-input:focus {
+        .select-input {
+            min-width: 140px;
+        }
+
+        .search-input:focus,
+        .select-input:focus {
             border-color: var(--accent-glow);
         }
 
@@ -172,28 +205,43 @@
             font-family: var(--font-jakarta);
         }
 
-        .btn:hover { border-color: var(--accent-glow); }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn:hover {
+            border-color: var(--accent-glow);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
 
         .btn-primary {
             background: var(--accent-glow);
             color: #080a10;
             border: none;
         }
-        .btn-primary:hover { background: #7dd3fc; }
+
+        .btn-primary:hover {
+            background: #7dd3fc;
+        }
 
         .btn-success {
             background: var(--accent-emerald);
             color: #080a10;
             border: none;
         }
-        .btn-success:hover { background: #6ee7b7; }
+
+        .btn-success:hover {
+            background: #6ee7b7;
+        }
 
         .table-container {
             border: 1px solid var(--border-primary);
             border-radius: 8px;
-            overflow: hidden;
+            overflow-x: auto;
+            overflow-y: auto;
             background-color: var(--bg-panel);
+            flex: 1;
+            min-height: 0;
         }
 
         table {
@@ -224,10 +272,22 @@
             vertical-align: middle;
         }
 
-        tr { cursor: pointer; transition: background-color 0.1s; }
-        tr:hover { background-color: #1a2236; }
-        tr.selected { background-color: #1e2a4a; }
-        tr:last-child td { border-bottom: none; }
+        tr {
+            cursor: pointer;
+            transition: background-color 0.1s;
+        }
+
+        tr:hover {
+            background-color: #1a2236;
+        }
+
+        tr.selected {
+            background-color: #1e2a4a;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
 
         .badge {
             display: inline-flex;
@@ -240,10 +300,25 @@
             letter-spacing: 0.3px;
         }
 
-        .badge-verified { background: rgba(52, 211, 153, 0.12); color: var(--accent-emerald); }
-        .badge-pending  { background: rgba(251, 191, 36, 0.12); color: var(--accent-amber); }
-        .badge-rejected { background: rgba(251, 113, 133, 0.12); color: var(--accent-rose); }
-        .badge-info     { background: rgba(56, 189, 248, 0.12); color: var(--accent-glow); }
+        .badge-verified {
+            background: rgba(52, 211, 153, 0.12);
+            color: var(--accent-emerald);
+        }
+
+        .badge-pending {
+            background: rgba(251, 191, 36, 0.12);
+            color: var(--accent-amber);
+        }
+
+        .badge-rejected {
+            background: rgba(251, 113, 133, 0.12);
+            color: var(--accent-rose);
+        }
+
+        .badge-info {
+            background: rgba(56, 189, 248, 0.12);
+            color: var(--accent-glow);
+        }
 
         .freshness {
             font-size: 10px;
@@ -251,9 +326,18 @@
             color: var(--text-muted);
             text-transform: uppercase;
         }
-        .freshness-hour { color: var(--accent-emerald); }
-        .freshness-day  { color: var(--accent-glow); }
-        .freshness-week { color: var(--accent-amber); }
+
+        .freshness-hour {
+            color: var(--accent-emerald);
+        }
+
+        .freshness-day {
+            color: var(--accent-glow);
+        }
+
+        .freshness-week {
+            color: var(--accent-amber);
+        }
 
         .confidence {
             font-family: var(--font-mono);
@@ -267,6 +351,7 @@
             border: 1px solid var(--border-primary);
             border-radius: 6px;
             padding: 14px;
+            flex-shrink: 0;
         }
 
         .lineage-title {
@@ -286,9 +371,16 @@
             align-items: baseline;
             gap: 12px;
         }
-        .metadata-row:last-child { margin-bottom: 0; }
 
-        .metadata-label { color: var(--text-secondary); flex-shrink: 0; }
+        .metadata-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .metadata-label {
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
         .metadata-value {
             color: var(--text-primary);
             font-weight: 500;
@@ -317,9 +409,21 @@
             transition: all 0.15s;
             flex-shrink: 0;
         }
-        .metadata-value:hover .copy-btn { opacity: 1; }
-        .copy-btn:hover { border-color: var(--accent-glow); color: var(--accent-glow); }
-        .copy-btn.copied { border-color: var(--accent-emerald); color: var(--accent-emerald); opacity: 1; }
+
+        .metadata-value:hover .copy-btn {
+            opacity: 1;
+        }
+
+        .copy-btn:hover {
+            border-color: var(--accent-glow);
+            color: var(--accent-glow);
+        }
+
+        .copy-btn.copied {
+            border-color: var(--accent-emerald);
+            color: var(--accent-emerald);
+            opacity: 1;
+        }
 
         .form-control {
             width: 100%;
@@ -332,7 +436,11 @@
             outline: none;
             font-family: var(--font-jakarta);
         }
-        .form-control:focus { border-color: var(--accent-glow); }
+
+        .form-control:focus {
+            border-color: var(--accent-glow);
+        }
+
         .form-label {
             font-size: 10px;
             color: var(--text-muted);
@@ -354,7 +462,11 @@
             vertical-align: middle;
         }
 
-        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
 
         .toast {
             position: fixed;
@@ -366,23 +478,41 @@
             border-radius: 6px;
             color: var(--text-primary);
             font-size: 13px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
             z-index: 1000;
             opacity: 0;
             transform: translateY(20px);
             transition: all 0.3s;
         }
-        .toast.show { opacity: 1; transform: translateY(0); }
-        .toast.success { border-left: 3px solid var(--accent-emerald); }
-        .toast.error { border-left: 3px solid var(--accent-rose); }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .toast.success {
+            border-left: 3px solid var(--accent-emerald);
+        }
+
+        .toast.error {
+            border-left: 3px solid var(--accent-rose);
+        }
 
         .empty-state {
             text-align: center;
             padding: 60px 20px;
             color: var(--text-muted);
         }
-        .empty-state h3 { font-size: 14px; margin-bottom: 8px; color: var(--text-secondary); }
-        .empty-state p { font-size: 12px; }
+
+        .empty-state h3 {
+            font-size: 14px;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state p {
+            font-size: 12px;
+        }
 
         .pagination {
             display: flex;
@@ -391,6 +521,7 @@
             margin-top: 16px;
             font-size: 12px;
             color: var(--text-secondary);
+            flex-shrink: 0;
         }
 
         .crawler-status {
@@ -401,226 +532,261 @@
             font-family: var(--font-mono);
             color: var(--text-secondary);
         }
+
         .crawler-status .dot {
             width: 6px;
             height: 6px;
             border-radius: 50%;
             background: var(--text-muted);
         }
-        .crawler-status.active .dot { background: var(--accent-emerald); animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        .crawler-status.active .dot {
+            background: var(--accent-emerald);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.4;
+            }
+        }
 
         .discovery-form {
             display: grid;
             grid-template-columns: 2fr 1fr 1fr auto;
             gap: 8px;
             margin-bottom: 16px;
+            flex-shrink: 0;
         }
     </style>
 </head>
+
 <body>
 
-<header>
-    <div class="brand">
-        <h1>FREELANCEDZ // Sourcing Workspace</h1>
-        <span class="version" id="appVersion">v2.0.0</span>
-        <div class="crawler-status" id="crawlerStatus">
-            <span class="dot"></span>
-            <span id="crawlerStatusText">crawler idle</span>
+    <header>
+        <div class="brand">
+            <h1>FREELANCEDZ // Sourcing Workspace</h1>
+            <span class="version" id="appVersion">v2.0.0</span>
+            <div class="crawler-status" id="crawlerStatus">
+                <span class="dot"></span>
+                <span id="crawlerStatusText">crawler idle</span>
+            </div>
         </div>
-    </div>
-    <div class="actions">
-        <button class="btn" onclick="runResolution()">Resolve Entities</button>
-        <button class="btn" onclick="scoreAll()">Rescore Leads</button>
-        <button class="btn btn-success" onclick="exportLeads()">Export CSV</button>
-    </div>
-</header>
-
-<div class="stats-bar" id="statsBar">
-    <div class="stat-cell">
-        <div class="stat-label">Total Leads</div>
-        <div class="stat-value" id="statTotal">—</div>
-    </div>
-    <div class="stat-cell">
-        <div class="stat-label">Analysed</div>
-        <div class="stat-value accent" id="statAnalysed">—</div>
-    </div>
-    <div class="stat-cell">
-        <div class="stat-label">Avg Score</div>
-        <div class="stat-value success" id="statAvgScore">—</div>
-    </div>
-    <div class="stat-cell">
-        <div class="stat-label">Resolved Entities</div>
-        <div class="stat-value" id="statEntities">—</div>
-    </div>
-    <div class="stat-cell">
-        <div class="stat-label">Fresh (24h)</div>
-        <div class="stat-value warn" id="statFresh">—</div>
-    </div>
-</div>
-
-<div class="workspace-grid">
-    <!-- Main Data Panel -->
-    <div class="data-panel">
-        <div class="discovery-form">
-            <input type="text" class="search-input" id="discoverQuery" placeholder="Industry to discover (e.g. pharmacie, menuiserie aluminium)">
-            <input type="text" class="search-input" id="discoverWilaya" placeholder="Wilaya (optional)">
-            <input type="number" class="search-input" id="discoverLimit" value="30" min="1" max="200" placeholder="Limit">
-            <button class="btn btn-primary" id="discoverBtn" onclick="runDiscovery()">Discover</button>
+        <div class="actions">
+            <button class="btn" onclick="runResolution()">Resolve Entities</button>
+            <button class="btn" onclick="scoreAll()">Rescore Leads</button>
+            <button class="btn btn-success" onclick="exportLeads()">Export CSV</button>
         </div>
+    </header>
 
-        <div class="toolbar">
-            <input type="text" class="search-input" id="searchInput" placeholder="Filter by name, phone, address..." onkeyup="if(event.key==='Enter')loadLeads()">
-            <select class="select-input" id="freshnessFilter" onchange="loadLeads()">
-                <option value="">All freshness</option>
-                <option value="hour">Last hour</option>
-                <option value="day">Last 24h</option>
-                <option value="week">Last week</option>
-                <option value="month">Last month</option>
-                <option value="older">Older</option>
-            </select>
-            <button class="btn" onclick="loadLeads()">Filter</button>
-            <button class="btn" onclick="prevPage()" id="prevBtn">Prev</button>
-            <button class="btn" onclick="nextPage()" id="nextBtn">Next</button>
+    <div class="stats-bar" id="statsBar">
+        <div class="stat-cell">
+            <div class="stat-label">Total Leads</div>
+            <div class="stat-value" id="statTotal">—</div>
         </div>
-
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Score</th>
-                        <th>Business</th>
-                        <th>Industry</th>
-                        <th>Wilaya</th>
-                        <th>Phone</th>
-                        <th>Source</th>
-                        <th>Freshness</th>
-                        <th>Status</th>
-                    </tr>
-                </thead>
-                <tbody id="leadsBody">
-                    <tr>
-                        <td colspan="8">
-                            <div class="empty-state">
-                                <h3>Loading leads...</h3>
-                                <p>Initialising the workspace.</p>
-                            </div>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
+        <div class="stat-cell">
+            <div class="stat-label">Analysed</div>
+            <div class="stat-value accent" id="statAnalysed">—</div>
         </div>
-        <div class="pagination">
-            <span id="pageInfo">—</span>
-            <span id="resultCount">—</span>
+        <div class="stat-cell">
+            <div class="stat-label">Avg Score</div>
+            <div class="stat-value success" id="statAvgScore">—</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-label">Resolved Entities</div>
+            <div class="stat-value" id="statEntities">—</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-label">Fresh (24h)</div>
+            <div class="stat-value warn" id="statFresh">—</div>
         </div>
     </div>
 
-    <!-- Audit & Lineage Sidebar -->
-    <div class="lineage-sidebar">
-        <div>
-            <h2 style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Entity Audit Trail</h2>
-            <p style="font-size: 11px; color: var(--text-secondary);">Select a lead to inspect its raw attributes and data lineage.</p>
-        </div>
+    <div class="workspace-grid">
+        <!-- Main Data Panel -->
+        <div class="data-panel">
+            <div class="discovery-form">
+                <input type="text" class="search-input" id="discoverQuery"
+                    placeholder="Industry to discover (e.g. pharmacie, menuiserie aluminium)">
+                <input type="text" class="search-input" id="discoverWilaya" placeholder="Wilaya (optional)">
+                <input type="number" class="search-input" id="discoverLimit" value="30" min="1" max="200"
+                    placeholder="Limit">
+                <button class="btn btn-primary" id="discoverBtn" onclick="runDiscovery()">Discover</button>
+            </div>
 
-        <div class="lineage-card" id="auditCard">
-            <div class="lineage-title">Lead Details</div>
-            <div class="empty-state" style="padding: 20px;">
-                <p>No lead selected.</p>
+            <div class="toolbar">
+                <input type="text" class="search-input" id="searchInput" placeholder="Filter by name, phone, address..."
+                    onkeyup="if(event.key==='Enter')loadLeads()">
+                <select class="select-input" id="freshnessFilter" onchange="loadLeads()">
+                    <option value="">All freshness</option>
+                    <option value="hour">Last hour</option>
+                    <option value="day">Last 24h</option>
+                    <option value="week">Last week</option>
+                    <option value="month">Last month</option>
+                    <option value="older">Older</option>
+                </select>
+                <button class="btn" onclick="loadLeads()">Filter</button>
+                <button class="btn" onclick="prevPage()" id="prevBtn">Prev</button>
+                <button class="btn" onclick="nextPage()" id="nextBtn">Next</button>
+            </div>
+
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Score</th>
+                            <th>Business</th>
+                            <th>Industry</th>
+                            <th>Wilaya</th>
+                            <th>Phone</th>
+                            <th>Source</th>
+                            <th>Freshness</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="leadsBody">
+                        <tr>
+                            <td colspan="8">
+                                <div class="empty-state">
+                                    <h3>Loading leads...</h3>
+                                    <p>Initialising the workspace.</p>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination">
+                <span id="pageInfo">—</span>
+                <span id="resultCount">—</span>
             </div>
         </div>
 
-        <div class="lineage-card" id="contactCard" style="display: none;">
-            <div class="lineage-title">Contact Channels</div>
-            <div id="contactRows"></div>
-        </div>
+        <!-- Audit & Lineage Sidebar -->
+        <div class="lineage-sidebar">
+            <div>
+                <h2 style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Entity Audit Trail</h2>
+                <p style="font-size: 11px; color: var(--text-secondary);">Select a lead to inspect its raw attributes
+                    and data lineage.</p>
+            </div>
 
-        <div class="lineage-card" id="analysisCard" style="display: none;">
-            <div class="lineage-title">LLM Analysis</div>
-            <div id="analysisRows"></div>
-        </div>
+            <!-- Sourcing Queue Monitor (Task Queue tracking) -->
+            <div class="lineage-card" id="campaignsCard">
+                <div class="lineage-title">Active Sourcing Queue</div>
+                <div id="campaignsRows">
+                    <div class="empty-state" style="padding: 10px;">No active campaigns.</div>
+                </div>
+            </div>
 
-        <div class="lineage-card">
-            <div class="lineage-title">Manual Overrides</div>
-            <label class="form-label">Corrected Legal Name</label>
-            <input type="text" class="form-control" id="overrideName" placeholder="Override parsed name...">
-            <label class="form-label" style="margin-top: 10px;">Tags (comma-separated)</label>
-            <input type="text" class="form-control" id="overrideTags" placeholder="vip, contacted, rejected...">
-            <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveOverrides()">Save Corrections</button>
+            <div class="lineage-card" id="auditCard">
+                <div class="lineage-title">Lead Details</div>
+                <div class="empty-state" style="padding: 20px;">
+                    <p>No lead selected.</p>
+                </div>
+            </div>
+
+            <div class="lineage-card" id="contactCard" style="display: none;">
+                <div class="lineage-title">Contact Channels</div>
+                <div id="contactRows"></div>
+            </div>
+
+            <div class="lineage-card" id="analysisCard" style="display: none;">
+                <div class="lineage-title">LLM Analysis</div>
+                <div id="analysisRows"></div>
+            </div>
+
+            <div class="lineage-card">
+                <div class="lineage-title">Manual Overrides</div>
+                <label class="form-label">Corrected Legal Name</label>
+                <input type="text" class="form-control" id="overrideName" placeholder="Override parsed name...">
+                <label class="form-label" style="margin-top: 10px;">Tags (comma-separated)</label>
+                <input type="text" class="form-control" id="overrideTags" placeholder="vip, contacted, rejected...">
+                <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveOverrides()">Save
+                    Corrections</button>
+                <button class="btn"
+                    style="width: 100%; margin-top: 8px; background-color: rgba(251, 113, 133, 0.2); border-color: var(--accent-rose); color: #fb7185;"
+                    onclick="blockSelectedLead()">Block Lead</button>
+            </div>
         </div>
     </div>
-</div>
 
-<div class="toast" id="toast"></div>
+    <div class="toast" id="toast"></div>
 
-<script>
-const API = '/api/v2';
-let currentLeads = [];
-let selectedLeadId = null;
-let currentOffset = 0;
-const PAGE_SIZE = 50;
+    <script>
+        const API = '/api/v2';
+        let currentLeads = [];
+        let selectedLeadId = null;
+        let currentOffset = 0;
+        const PAGE_SIZE = 50;
 
-// ---- Initialisation ----
-async function init() {
-    await Promise.all([loadStats(), loadLeads(), pollCrawlerStatus()]);
-    setInterval(loadStats, 15000);
-    setInterval(pollCrawlerStatus, 10000);
-}
+        // ---- Initialisation ----
+        async function init() {
+            await Promise.all([loadStats(), loadLeads(), pollCrawlerStatus(), pollCampaigns()]);
+            setInterval(loadStats, 15000);
+            setInterval(pollCrawlerStatus, 10000);
+            setInterval(pollCampaigns, 3000); // Poll campaigns queue every 3 seconds
+        }
 
-// ---- Stats ----
-async function loadStats() {
-    try {
-        const r = await fetch(API + '/stats');
-        const data = await r.json();
-        document.getElementById('statTotal').textContent = data.total_leads ?? 0;
-        document.getElementById('statAnalysed').textContent = data.analyzed_leads ?? 0;
-        document.getElementById('statAvgScore').textContent = (data.average_score ?? 0).toFixed(1);
-        document.getElementById('statEntities').textContent = data.total_resolved_entities ?? 0;
-        const fresh = (data.age_breakdown || []).filter(a => ['hour','day'].includes(a.age_class)).reduce((s,a)=>s+a.count,0);
-        document.getElementById('statFresh').textContent = fresh;
-    } catch (e) { console.error('stats failed', e); }
-}
+        // ---- Stats ----
+        async function loadStats() {
+            try {
+                const r = await fetch(API + '/stats');
+                const data = await r.json();
+                document.getElementById('statTotal').textContent = data.total_leads ?? 0;
+                document.getElementById('statAnalysed').textContent = data.analyzed_leads ?? 0;
+                document.getElementById('statAvgScore').textContent = (data.average_score ?? 0).toFixed(1);
+                document.getElementById('statEntities').textContent = data.total_resolved_entities ?? 0;
+                const fresh = (data.age_breakdown || []).filter(a => ['hour', 'day'].includes(a.age_class)).reduce((s, a) => s + a.count, 0);
+                document.getElementById('statFresh').textContent = fresh;
+            } catch (e) { console.error('stats failed', e); }
+        }
 
-// ---- Leads list ----
-async function loadLeads() {
-    const params = new URLSearchParams({
-        limit: String(PAGE_SIZE),
-        offset: String(currentOffset),
-    });
-    const search = document.getElementById('searchInput').value.trim();
-    const freshness = document.getElementById('freshnessFilter').value;
-    if (search) params.set('q', search);
-    if (freshness) params.set('age_class', freshness);
+        // ---- Leads list ----
+        async function loadLeads() {
+            const params = new URLSearchParams({
+                limit: String(PAGE_SIZE),
+                offset: String(currentOffset),
+            });
+            const search = document.getElementById('searchInput').value.trim();
+            const freshness = document.getElementById('freshnessFilter').value;
+            if (search) params.set('q', search);
+            if (freshness) params.set('age_class', freshness);
 
-    try {
-        let url = API + '/leads?' + params.toString();
-        if (search) url = API + '/leads/search?' + params.toString();
-        const r = await fetch(url);
-        const data = await r.json();
-        currentLeads = data.leads || [];
-        renderLeads(currentLeads);
-        document.getElementById('resultCount').textContent = `${currentLeads.length} results`;
-        document.getElementById('pageInfo').textContent = `offset ${currentOffset}`;
-        document.getElementById('prevBtn').disabled = currentOffset === 0;
-        document.getElementById('nextBtn').disabled = currentLeads.length < PAGE_SIZE;
-    } catch (e) {
-        showToast('Failed to load leads: ' + e.message, 'error');
-    }
-}
+            try {
+                let url = API + '/leads?' + params.toString();
+                if (search) url = API + '/leads/search?' + params.toString();
+                const r = await fetch(url);
+                const data = await r.json();
+                currentLeads = data.leads || [];
+                renderLeads(currentLeads);
+                document.getElementById('resultCount').textContent = `${currentLeads.length} results`;
+                document.getElementById('pageInfo').textContent = `offset ${currentOffset}`;
+                document.getElementById('prevBtn').disabled = currentOffset === 0;
+                document.getElementById('nextBtn').disabled = currentLeads.length < PAGE_SIZE;
+            } catch (e) {
+                showToast('Failed to load leads: ' + e.message, 'error');
+            }
+        }
 
-function renderLeads(leads) {
-    const tbody = document.getElementById('leadsBody');
-    if (!leads.length) {
-        tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><h3>No leads yet</h3><p>Use the discovery bar above to find businesses.</p></div></td></tr>`;
-        return;
-    }
-    tbody.innerHTML = leads.map(l => {
-        const score = (l.priority_score || 0).toFixed(0);
-        const phone = l.phone || '—';
-        const fresh = l.freshness || 'older';
-        const freshClass = `freshness freshness-${fresh}`;
-        const statusBadge = statusToBadge(l.status);
-        return `<tr onclick="selectLead(${l.id})" class="${selectedLeadId === l.id ? 'selected' : ''}">
+        function renderLeads(leads) {
+            const tbody = document.getElementById('leadsBody');
+            if (!leads.length) {
+                tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><h3>No leads yet</h3><p>Use the discovery bar above to find businesses.</p></div></td></tr>`;
+                return;
+            }
+            tbody.innerHTML = leads.map(l => {
+                const score = (l.priority_score || 0).toFixed(0);
+                const phone = l.phone || '—';
+                const fresh = l.freshness || 'older';
+                const freshClass = `freshness freshness-${fresh}`;
+                const statusBadge = statusToBadge(l.status);
+                return `<tr onclick="selectLead(${l.id})" class="${selectedLeadId === l.id ? 'selected' : ''}">
             <td><span class="confidence">${score}</span></td>
             <td><strong>${escapeHtml(l.name)}</strong></td>
             <td>${escapeHtml(l.industry || '—')}</td>
@@ -630,38 +796,38 @@ function renderLeads(leads) {
             <td><span class="${freshClass}">${fresh}</span></td>
             <td>${statusBadge}</td>
         </tr>`;
-    }).join('');
-}
+            }).join('');
+        }
 
-function statusToBadge(status) {
-    const map = {
-        discovered: '<span class="badge badge-pending">Discovered</span>',
-        analyzed:   '<span class="badge badge-info">Analysed</span>',
-        scored:     '<span class="badge badge-info">Scored</span>',
-        contacted:  '<span class="badge badge-verified">Contacted</span>',
-        rejected:   '<span class="badge badge-rejected">Rejected</span>',
-        verified:   '<span class="badge badge-verified">Verified</span>',
-    };
-    return map[status] || `<span class="badge badge-pending">${escapeHtml(status || '—')}</span>`;
-}
+        function statusToBadge(status) {
+            const map = {
+                discovered: '<span class="badge badge-pending">Discovered</span>',
+                analyzed: '<span class="badge badge-info">Analysed</span>',
+                scored: '<span class="badge badge-info">Scored</span>',
+                contacted: '<span class="badge badge-verified">Contacted</span>',
+                rejected: '<span class="badge badge-rejected">Blocked</span>',
+                verified: '<span class="badge badge-verified">Verified</span>',
+            };
+            return map[status] || `<span class="badge badge-pending">${escapeHtml(status || '—')}</span>`;
+        }
 
-function prevPage() { if (currentOffset > 0) { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadLeads(); } }
-function nextPage() { if (currentLeads.length === PAGE_SIZE) { currentOffset += PAGE_SIZE; loadLeads(); } }
+        function prevPage() { if (currentOffset > 0) { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadLeads(); } }
+        function nextPage() { if (currentLeads.length === PAGE_SIZE) { currentOffset += PAGE_SIZE; loadLeads(); } }
 
-// ---- Lead selection / detail ----
-async function selectLead(id) {
-    selectedLeadId = id;
-    renderLeads(currentLeads);
-    try {
-        const r = await fetch(API + '/leads/' + id);
-        const lead = await r.json();
-        renderAudit(lead);
-    } catch (e) { showToast('Failed to load lead detail', 'error'); }
-}
+        // ---- Lead selection / detail ----
+        async function selectLead(id) {
+            selectedLeadId = id;
+            renderLeads(currentLeads);
+            try {
+                const r = await fetch(API + '/leads/' + id);
+                const lead = await r.json();
+                renderAudit(lead);
+            } catch (e) { showToast('Failed to load lead detail', 'error'); }
+        }
 
-function renderAudit(lead) {
-    const card = document.getElementById('auditCard');
-    card.innerHTML = `
+        function renderAudit(lead) {
+            const card = document.getElementById('auditCard');
+            card.innerHTML = `
         <div class="lineage-title">Lead Details</div>
         <div class="metadata-row"><span class="metadata-label">ID</span><span class="metadata-value">${lead.id}</span></div>
         <div class="metadata-row"><span class="metadata-label">Name</span><span class="metadata-value">${escapeHtml(lead.name)}</span></div>
@@ -673,207 +839,271 @@ function renderAudit(lead) {
         <div class="metadata-row"><span class="metadata-label">Discovered</span><span class="metadata-value">${formatDate(lead.discovered_at)}</span></div>
         <div class="metadata-row"><span class="metadata-label">Source URL</span><span class="metadata-value">${escapeHtml(lead.source_url || '—')}</span></div>
     `;
-    document.getElementById('overrideName').value = lead.name || '';
-    document.getElementById('overrideTags').value = (lead.tags || []).join(', ');
+            document.getElementById('overrideName').value = lead.name || '';
+            document.getElementById('overrideTags').value = (lead.tags || []).join(', ');
 
-    // Contact channels
-    const contactCard = document.getElementById('contactCard');
-    const phones = lead.phone_metadata || [];
-    if (phones.length || lead.email || (lead.social_media && lead.social_media.length)) {
-        contactCard.style.display = '';
-        let rows = '';
-        phones.forEach(p => {
-            const val = p.e164 + (p.carrier ? ' (' + p.carrier + ')' : '');
-            rows += `<div class="metadata-row"><span class="metadata-label">${p.phone_type || 'PHONE'}</span><span class="metadata-value">${escapeHtml(p.e164)} ${p.carrier ? '(' + escapeHtml(p.carrier) + ')' : ''}${copyBtn(p.e164)}</span></div>`;
-        });
-        if (lead.email) rows += `<div class="metadata-row"><span class="metadata-label">EMAIL</span><span class="metadata-value">${escapeHtml(lead.email)}${copyBtn(lead.email)}</span></div>`;
-        (lead.social_media || []).forEach(s => {
-            rows += `<div class="metadata-row"><span class="metadata-label">SOCIAL</span><span class="metadata-value">${escapeHtml(s)}${copyBtn(s)}</span></div>`;
-        });
-        document.getElementById('contactRows').innerHTML = rows;
-    } else {
-        contactCard.style.display = 'none';
-    }
+            // Contact channels
+            const contactCard = document.getElementById('contactCard');
+            const phones = lead.phone_metadata || [];
+            if (phones.length || lead.email || (lead.social_media && lead.social_media.length)) {
+                contactCard.style.display = '';
+                let rows = '';
+                phones.forEach(p => {
+                    const val = p.e164 + (p.carrier ? ' (' + p.carrier + ')' : '');
+                    rows += `<div class="metadata-row"><span class="metadata-label">${p.phone_type || 'PHONE'}</span><span class="metadata-value">${escapeHtml(p.e164)} ${p.carrier ? '(' + escapeHtml(p.carrier) + ')' : ''}${copyBtn(p.e164)}</span></div>`;
+                });
+                if (lead.email) rows += `<div class="metadata-row"><span class="metadata-label">EMAIL</span><span class="metadata-value">${escapeHtml(lead.email)}${copyBtn(lead.email)}</span></div>`;
+                (lead.social_media || []).forEach(s => {
+                    rows += `<div class="metadata-row"><span class="metadata-label">SOCIAL</span><span class="metadata-value">${escapeHtml(s)}${copyBtn(s)}</span></div>`;
+                });
+                document.getElementById('contactRows').innerHTML = rows;
+            } else {
+                contactCard.style.display = 'none';
+            }
 
-    // LLM analysis
-    const analysisCard = document.getElementById('analysisCard');
-    if (lead.analysis) {
-        analysisCard.style.display = '';
-        const a = lead.analysis;
-        let rows = '';
-        rows += `<div class="metadata-row"><span class="metadata-label">Digital Score</span><span class="metadata-value">${a.digital_presence_score}/100</span></div>`;
-        rows += `<div class="metadata-row"><span class="metadata-label">Model</span><span class="metadata-value">${escapeHtml(a.analysis_model || '—')}</span></div>`;
-        if (a.estimated_monthly_revenue_usd) {
-            rows += `<div class="metadata-row"><span class="metadata-label">Est. Revenue</span><span class="metadata-value">$${a.estimated_monthly_revenue_usd}/mo</span></div>`;
+            // LLM analysis
+            const analysisCard = document.getElementById('analysisCard');
+            if (lead.analysis) {
+                analysisCard.style.display = '';
+                const a = lead.analysis;
+                let rows = '';
+                rows += `<div class="metadata-row"><span class="metadata-label">Digital Score</span><span class="metadata-value">${a.digital_presence_score}/100</span></div>`;
+                rows += `<div class="metadata-row"><span class="metadata-label">Model</span><span class="metadata-value">${escapeHtml(a.analysis_model || '—')}</span></div>`;
+                if (a.estimated_monthly_revenue_usd) {
+                    rows += `<div class="metadata-row"><span class="metadata-label">Est. Revenue</span><span class="metadata-value">$${a.estimated_monthly_revenue_usd}/mo</span></div>`;
+                }
+                if (a.pain_points && a.pain_points.length) {
+                    rows += `<div class="metadata-row"><span class="metadata-label">Pain Points</span><span class="metadata-value">${a.pain_points.length} identified</span></div>`;
+                }
+                if (a.recommended_solutions && a.recommended_solutions.length) {
+                    rows += `<div class="metadata-row"><span class="metadata-label">Solutions</span><span class="metadata-value">${a.recommended_solutions.length} proposed</span></div>`;
+                }
+                document.getElementById('analysisRows').innerHTML = rows;
+            } else {
+                analysisCard.style.display = 'none';
+            }
         }
-        if (a.pain_points && a.pain_points.length) {
-            rows += `<div class="metadata-row"><span class="metadata-label">Pain Points</span><span class="metadata-value">${a.pain_points.length} identified</span></div>`;
+
+        // ---- Discovery ----
+        async function runDiscovery() {
+            const query = document.getElementById('discoverQuery').value.trim();
+            const wilaya = document.getElementById('discoverWilaya').value.trim();
+            const limit = parseInt(document.getElementById('discoverLimit').value, 10) || 30;
+            if (!query) { showToast('Enter a query first', 'error'); return; }
+
+            const btn = document.getElementById('discoverBtn');
+            btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Queueing...';
+            try {
+                // Run with background: true so the browser never blocks or freezes
+                const r = await fetch(API + '/discover', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, wilaya: wilaya || null, limit, background: true }),
+                });
+                showToast('Search query added to Sourcing Queue', 'success');
+                await pollCampaigns();
+            } catch (e) {
+                showToast('Discovery launch failed: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false; btn.innerHTML = 'Discover';
+            }
         }
-        if (a.recommended_solutions && a.recommended_solutions.length) {
-            rows += `<div class="metadata-row"><span class="metadata-label">Solutions</span><span class="metadata-value">${a.recommended_solutions.length} proposed</span></div>`;
+
+        // ---- Poll Campaigns Queue (Task Progress) ----
+        async function pollCampaigns() {
+            try {
+                const r = await fetch(API + '/discover/campaigns');
+                const campaigns = await r.json();
+                const container = document.getElementById('campaignsRows');
+                if (!campaigns.length) {
+                    container.innerHTML = `<div class="empty-state" style="padding: 10px;">No active campaigns.</div>`;
+                    return;
+                }
+                container.innerHTML = campaigns.map(c => {
+                    const date = new Date(c.created_at).toLocaleTimeString();
+                    let statusIcon = '';
+                    let statusText = c.status;
+                    if (c.status === 'processing') {
+                        statusIcon = '<span class="spinner" style="width:10px; height:10px; margin-right:5px;"></span> ';
+                        statusText = `<span style="color: var(--accent-glow)">active</span>`;
+                    } else if (c.status === 'completed') {
+                        statusIcon = '<span style="color: var(--accent-emerald)">✓</span> ';
+                        statusText = `<span style="color: var(--accent-emerald)">done (+${c.saved_qty})</span>`;
+                    } else if (c.status === 'failed') {
+                        statusIcon = '<span style="color: var(--accent-rose)">✗</span> ';
+                        statusText = `<span style="color: var(--accent-rose)">failed</span>`;
+                    }
+                    return `<div class="metadata-row" style="border-bottom: 1px solid var(--border-primary); padding-bottom: 6px; margin-bottom: 6px;">
+                <span class="metadata-label">${statusIcon}<strong>${escapeHtml(c.query)}</strong> ${c.wilaya ? '(' + escapeHtml(c.wilaya) + ')' : ''}</span>
+                <span class="metadata-value" style="font-size: 10px;">${statusText} <span style="color: var(--text-muted); font-size:9px;">[${date}]</span></span>
+            </div>`;
+                }).join('');
+            } catch (e) { /* silent */ }
         }
-        document.getElementById('analysisRows').innerHTML = rows;
-    } else {
-        analysisCard.style.display = 'none';
-    }
-}
 
-// ---- Discovery ----
-async function runDiscovery() {
-    const query = document.getElementById('discoverQuery').value.trim();
-    const wilaya = document.getElementById('discoverWilaya').value.trim();
-    const limit = parseInt(document.getElementById('discoverLimit').value, 10) || 30;
-    if (!query) { showToast('Enter a query first', 'error'); return; }
-
-    const btn = document.getElementById('discoverBtn');
-    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Discovering...';
-    try {
-        const r = await fetch(API + '/discover', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({query, wilaya: wilaya || null, limit, background: false}),
-        });
-        const data = await r.json();
-        showToast(`Discovered ${data.discovered_count}, saved ${data.saved_count} new leads`, 'success');
-        await loadLeads();
-        await loadStats();
-    } catch (e) {
-        showToast('Discovery failed: ' + e.message, 'error');
-    } finally {
-        btn.disabled = false; btn.innerHTML = 'Discover';
-    }
-}
-
-// ---- Actions ----
-async function runResolution() {
-    showToast('Resolving entities...');
-    try {
-        const r = await fetch(API + '/entities/resolve', {method: 'POST'});
-        const data = await r.json();
-        showToast(`Resolved ${data.input_count} → ${data.output_count} entities (${data.compression_ratio}x compression)`, 'success');
-        await loadStats();
-    } catch (e) { showToast('Resolution failed: ' + e.message, 'error'); }
-}
-
-async function scoreAll() {
-    showToast('Rescoring leads...');
-    try {
-        const r = await fetch(API + '/leads/score-all', {method: 'POST'});
-        const data = await r.json();
-        showToast(`Scored ${data.scored_count} leads`, 'success');
-        await loadLeads();
-        await loadStats();
-    } catch (e) { showToast('Scoring failed: ' + e.message, 'error'); }
-}
-
-async function exportLeads() {
-    try {
-        const r = await fetch(API + '/export/leads/csv?limit=1000');
-        if (r.ok) {
-            const blob = await r.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = 'leads.csv'; a.click();
-            URL.revokeObjectURL(url);
-            showToast('Export downloaded', 'success');
-        } else { showToast('Export failed', 'error'); }
-    } catch (e) { showToast('Export failed: ' + e.message, 'error'); }
-}
-
-async function saveOverrides() {
-    if (!selectedLeadId) { showToast('Select a lead first', 'error'); return; }
-    const tags = document.getElementById('overrideTags').value
-        .split(',').map(t => t.trim()).filter(Boolean);
-    try {
-        await fetch(API + '/leads/' + selectedLeadId + '/tags', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({tags}),
-        });
-        showToast('Tags saved', 'success');
-    } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
-}
-
-// ---- Crawler status ----
-async function pollCrawlerStatus() {
-    try {
-        const r = await fetch(API + '/crawler/status');
-        const data = await r.json();
-        const el = document.getElementById('crawlerStatus');
-        const txt = document.getElementById('crawlerStatusText');
-        if (data.is_active) {
-            el.classList.add('active');
-            txt.textContent = `crawler active (${data.stats.entities_saved} saved)`;
-        } else {
-            el.classList.remove('active');
-            txt.textContent = 'crawler idle';
+        // ---- Actions ----
+        async function runResolution() {
+            showToast('Resolving entities...');
+            try {
+                const r = await fetch(API + '/entities/resolve', { method: 'POST' });
+                const data = await r.json();
+                showToast(`Resolved ${data.input_count} → ${data.output_count} entities (${data.compression_ratio}x compression)`, 'success');
+                await loadLeads();
+                await loadStats();
+            } catch (e) { showToast('Resolution failed: ' + e.message, 'error'); }
         }
-    } catch (e) { /* silent */ }
-}
 
-// ---- Helpers ----
-function showToast(msg, kind) {
-    const t = document.getElementById('toast');
-    t.textContent = msg;
-    t.className = 'toast show ' + (kind || '');
-    setTimeout(() => t.className = 'toast', 3500);
-}
-
-function escapeHtml(s) {
-    if (s == null) return '';
-    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-function formatDate(iso) {
-    if (!iso) return '—';
-    try {
-        const d = new Date(iso);
-        return d.toLocaleString();
-    } catch { return iso; }
-}
-
-// ---- Copy-to-clipboard (Task 76) ----
-// Returns an inline copy button HTML snippet for a given value.
-// The button is invisible until the user hovers the metadata row,
-// then turns green for 1.5s after a successful copy.
-function copyBtn(value) {
-    if (!value) return '';
-    const safe = value.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
-    return `<button class="copy-btn" title="Copy to clipboard" onclick="copyToClipboard(event, '${safe}')">⧉</button>`;
-}
-
-async function copyToClipboard(event, value) {
-    event.stopPropagation();
-    const btn = event.currentTarget;
-    if (!btn) return;
-    try {
-        // Prefer the modern async Clipboard API (requires HTTPS or localhost).
-        if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(value);
-        } else {
-            // Legacy fallback for non-secure contexts (e.g. plain HTTP).
-            const ta = document.createElement('textarea');
-            ta.value = value;
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            document.body.removeChild(ta);
+        async function scoreAll() {
+            showToast('Rescoring leads...');
+            try {
+                const r = await fetch(API + '/leads/score-all', { method: 'POST' });
+                const data = await r.json();
+                showToast(`Scored ${data.scored_count} leads`, 'success');
+                await loadLeads();
+                await loadStats();
+            } catch (e) { showToast('Scoring failed: ' + e.message, 'error'); }
         }
-        btn.classList.add('copied');
-        btn.innerHTML = '✓';
-        showToast('Copied: ' + (value.length > 40 ? value.slice(0, 37) + '...' : value), 'success');
-        setTimeout(() => {
-            btn.classList.remove('copied');
-            btn.innerHTML = '⧉';
-        }, 1500);
-    } catch (e) {
-        showToast('Copy failed: ' + e.message, 'error');
-    }
-}
 
-init();
-</script>
+        async function exportLeads() {
+            try {
+                const r = await fetch(API + '/export/leads/csv?limit=1000');
+                if (r.ok) {
+                    const blob = await r.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'leads.csv'; a.click();
+                    URL.revokeObjectURL(url);
+                    showToast('Export downloaded', 'success');
+                } else { showToast('Export failed', 'error'); }
+            } catch (e) { showToast('Export failed: ' + e.message, 'error'); }
+        }
+
+        async function saveOverrides() {
+            if (!selectedLeadId) { showToast('Select a lead first', 'error'); return; }
+            const tags = document.getElementById('overrideTags').value
+                .split(',').map(t => t.trim()).filter(Boolean);
+            try {
+                await fetch(API + '/leads/' + selectedLeadId + '/tags', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tags }),
+                });
+                showToast('Tags saved', 'success');
+            } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
+        }
+
+        async function blockSelectedLead() {
+            if (!selectedLeadId) { showToast('Select a lead first', 'error'); return; }
+            if (!confirm("Are you sure you want to block this lead? It will be removed from your dashboard list.")) return;
+            try {
+                const r = await fetch(`${API}/leads/${selectedLeadId}/status`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'rejected' }), // 'rejected' status excludes it from list queries automatically
+                });
+                if (r.ok) {
+                    showToast('Lead blocked successfully', 'success');
+                    selectedLeadId = null;
+                    document.getElementById('auditCard').innerHTML = `
+                <div class="lineage-title">Lead Details</div>
+                <div class="empty-state" style="padding: 20px;">
+                    <p>No lead selected.</p>
+                </div>
+            `;
+                    document.getElementById('contactCard').style.display = 'none';
+                    document.getElementById('analysisCard').style.display = 'none';
+                    await loadLeads();
+                    await loadStats();
+                } else {
+                    showToast('Failed to block lead', 'error');
+                }
+            } catch (e) {
+                showToast('Failed to block lead: ' + e.message, 'error');
+            }
+        }
+
+        // ---- Crawler status ----
+        async function pollCrawlerStatus() {
+            try {
+                const r = await fetch(API + '/crawler/status');
+                const data = await r.json();
+                const el = document.getElementById('crawlerStatus');
+                const txt = document.getElementById('crawlerStatusText');
+                if (data.is_active) {
+                    el.classList.add('active');
+                    txt.textContent = `crawler active (${data.stats.entities_saved} saved)`;
+                } else {
+                    el.classList.remove('active');
+                    txt.textContent = 'crawler idle';
+                }
+            } catch (e) { /* silent */ }
+        }
+
+        // ---- Helpers ----
+        function showToast(msg, kind) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show ' + (kind || '');
+            setTimeout(() => t.className = 'toast', 3500);
+        }
+
+        // Centralised escaping helper protecting against XSS injections (Task 43)
+        function escapeHtml(s) {
+            if (s == null) return '';
+            return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        function formatDate(iso) {
+            if (!iso) return '—';
+            try {
+                const d = new Date(iso);
+                return d.toLocaleString();
+            } catch { return iso; }
+        }
+
+        // ---- Copy-to-clipboard (Task 76) ----
+        // Returns an inline copy button HTML snippet for a given value.
+        // The button is invisible until the user hovers the metadata row,
+        // then turns green for 1.5s after a successful copy.
+        function copyBtn(value) {
+            if (!value) return '';
+            const safe = value.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+            return `<button class="copy-btn" title="Copy to clipboard" onclick="copyToClipboard(event, '${safe}')">⧉</button>`;
+        }
+
+        async function copyToClipboard(event, value) {
+            event.stopPropagation();
+            const btn = event.currentTarget;
+            if (!btn) return;
+            try {
+                // Prefer the modern async Clipboard API (requires HTTPS or localhost).
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(value);
+                } else {
+                    // Legacy fallback for non-secure contexts (e.g. plain HTTP).
+                    const ta = document.createElement('textarea');
+                    ta.value = value;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                }
+                btn.classList.add('copied');
+                btn.innerHTML = '✓';
+                showToast('Copied: ' + (value.length > 40 ? value.slice(0, 37) + '...' : value), 'success');
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    btn.innerHTML = '⧉';
+                }, 1500);
+            } catch (e) {
+                showToast('Copy failed: ' + e.message, 'error');
+            }
+        }
+
+        init();
+    </script>
 </body>
+
 </html>

@@ -25,8 +25,9 @@ from utils.url_utils import domain_of
 _logger = logging.getLogger("utils.spam_filter")
 
 
-# Domains that are pure directories / aggregators / social platforms.
-# We never want to treat these as standalone businesses.
+# Domains that are pure directories or index aggregators.
+# Social platforms are deliberately excluded here so individual business profiles
+# can be scraped and pitched web-design services.
 EXACT_DOMAINS: frozenset[str] = frozenset({
     "cybo.com",
     "yellowpages.com",
@@ -38,7 +39,6 @@ EXACT_DOMAINS: frozenset[str] = frozenset({
     "tripadvisor.fr",
     "yelp.com",
     "reddit.com",
-    "youtube.com",
     "findhealthclinics.com",
     "rentechdigital.com",
     "sante-dz.com",
@@ -49,22 +49,12 @@ EXACT_DOMAINS: frozenset[str] = frozenset({
     "africabizinfo.com",
     "annuaire-algerie.com",
     "elmouchir.caci.dz",
-    "facebook.com",
-    "instagram.com",
-    "tiktok.com",
-    "twitter.com",
-    "x.com",
-    "linkedin.com",
-    "pinterest.com",
-    "vk.com",
 })
 
 
 # Path-level patterns that signal a directory listing rather than a real
 # business page. Matched as substrings of the URL path.
 PATH_PATTERNS: frozenset[str] = frozenset({
-    "/pages/",
-    "/company/",
     "/search/",
     "/directory/",
     "/annuaire/",

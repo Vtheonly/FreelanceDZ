@@ -103,3 +103,11 @@ async def discover(
     except Exception as exc:
         _logger.exception("Discovery failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/discover/campaigns")
+async def get_campaigns(
+    discovery: DiscoveryService = Depends(get_discovery_service),
+):
+    """List recent and active discovery campaigns for UI progress monitoring."""
+    return await discovery.list_campaigns(limit=5)

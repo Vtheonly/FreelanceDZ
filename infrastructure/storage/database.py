@@ -327,3 +327,23 @@ def _migration_4_fts(conn: sqlite3.Connection) -> None:
         END;
         """
     )
+
+
+@migration(5, "Add discovery_campaigns table for tracking background sourcing tasks")
+def _migration_5_campaigns(conn: sqlite3.Connection) -> None:
+    """Create a persistent queue table to monitor progress of discovery campaigns in the UI."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS discovery_campaigns (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            query          TEXT NOT NULL,
+            wilaya         TEXT,
+            limit_num      INTEGER NOT NULL,
+            status         TEXT NOT NULL, -- pending|processing|completed|failed
+            discovered_qty INTEGER DEFAULT 0,
+            saved_qty      INTEGER DEFAULT 0,
+            created_at     TEXT NOT NULL,
+            updated_at     TEXT NOT NULL
+        );
+        """
+    )

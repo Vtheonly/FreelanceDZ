@@ -154,7 +154,12 @@ class LeadRepository(ILeadRepository):
         limit: int = 100,
         offset: int = 0,
     ) -> list[Lead]:
-        clauses = ["s.priority_score >= ?"]
+        # COALESCE handles newly discovered leads that do not have scores yet
+        # Second clause strictly filters out blocked leads (status = 'rejected')
+        clauses = [
+            "COALESCE(s.priority_score, 0.0) >= ?",
+            "COALESCE(s.status, 'discovered') != 'rejected'"
+        ]
         params: list[Any] = [min_score]
         if wilaya:
             clauses.append("LOWER(r.wilaya) = LOWER(?)")
@@ -169,7 +174,7 @@ class LeadRepository(ILeadRepository):
         sql = (
             self._base_query()
             + where
-            + " ORDER BY s.priority_score DESC, r.created_at DESC LIMIT ? OFFSET ?"
+            + " ORDER BY COALESCE(s.priority_score, 0.0) DESC, r.created_at DESC LIMIT ? OFFSET ?"
         )
         params.extend([limit, offset])
 
@@ -182,26 +187,27 @@ class LeadRepository(ILeadRepository):
     async def count_leads(self) -> int:
         def _execute():
             with self._db.connection() as conn:
-                return conn.execute("SELECT COUNT(*) FROM raw_records").fetchone()[0]
+                return conn.execute("SELECT COUNT(*) FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected'").fetchone()[0]
         return await asyncio.to_thread(_execute)
 
     async def count_analyzed(self) -> int:
         def _execute():
             with self._db.connection() as conn:
-                return conn.execute("SELECT COUNT(*) FROM analyses").fetchone()[0]
+                return conn.execute("SELECT COUNT(*) FROM analyses a JOIN lead_scores s ON s.raw_record_id = a.raw_record_id WHERE COALESCE(s.status, 'discovered') != 'rejected'").fetchone()[0]
         return await asyncio.to_thread(_execute)
 
     async def search(self, term: str, limit: int = 50) -> list[Lead]:
-        """Use the FTS5 mirror for fast full-text search."""
+        """Use the FTS5 mirror for fast full-text search, excluding blocked leads."""
         sql = """
             SELECT r.*
             FROM raw_records_fts f
             JOIN raw_records r ON r.id = f.rowid
+            LEFT JOIN lead_scores s ON s.raw_record_id = r.id
             WHERE raw_records_fts MATCH ?
+              AND COALESCE(s.status, 'discovered') != 'rejected'
             ORDER BY rank
             LIMIT ?
         """
-        # FTS5 query syntax: wrap the term in quotes to treat it as a phrase.
         fts_query = _build_fts_query(term)
 
         def _execute():
@@ -213,36 +219,36 @@ class LeadRepository(ILeadRepository):
     async def stats(self) -> dict[str, Any]:
         def _execute():
             with self._db.connection() as conn:
-                total = conn.execute("SELECT COUNT(*) FROM raw_records").fetchone()[0]
-                analyzed = conn.execute("SELECT COUNT(*) FROM analyses").fetchone()[0]
+                total = conn.execute("SELECT COUNT(*) FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected'").fetchone()[0]
+                analyzed = conn.execute("SELECT COUNT(*) FROM analyses a LEFT JOIN lead_scores s ON s.raw_record_id = a.raw_record_id WHERE COALESCE(s.status, 'discovered') != 'rejected'").fetchone()[0]
                 scored = conn.execute(
-                    "SELECT COUNT(*) FROM lead_scores WHERE priority_score > 0"
+                    "SELECT COUNT(*) FROM lead_scores WHERE priority_score > 0 AND status != 'rejected'"
                 ).fetchone()[0]
                 avg_score = conn.execute(
-                    "SELECT AVG(priority_score) FROM lead_scores"
+                    "SELECT AVG(priority_score) FROM lead_scores WHERE status != 'rejected'"
                 ).fetchone()[0] or 0.0
                 top_wilayas = [
                     {"wilaya": r[0], "count": r[1]}
                     for r in conn.execute(
-                        "SELECT wilaya, COUNT(*) c FROM raw_records GROUP BY wilaya ORDER BY c DESC LIMIT 10"
+                        "SELECT wilaya, COUNT(*) c FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected' GROUP BY wilaya ORDER BY c DESC LIMIT 10"
                     ).fetchall()
                 ]
                 top_industries = [
                     {"industry": r[0], "count": r[1]}
                     for r in conn.execute(
-                        "SELECT industry, COUNT(*) c FROM raw_records GROUP BY industry ORDER BY c DESC LIMIT 10"
+                        "SELECT industry, COUNT(*) c FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected' GROUP BY industry ORDER BY c DESC LIMIT 10"
                     ).fetchall()
                 ]
                 sources = [
                     {"source": r[0], "count": r[1]}
                     for r in conn.execute(
-                        "SELECT source, COUNT(*) c FROM raw_records GROUP BY source ORDER BY c DESC"
+                        "SELECT source, COUNT(*) c FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected' GROUP BY source ORDER BY c DESC"
                     ).fetchall()
                 ]
                 age_breakdown = [
                     {"age_class": r[0], "count": r[1]}
                     for r in conn.execute(
-                        "SELECT calculated_age_class, COUNT(*) c FROM raw_records GROUP BY calculated_age_class ORDER BY c DESC"
+                        "SELECT calculated_age_class, COUNT(*) c FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected' GROUP BY calculated_age_class ORDER BY c DESC"
                     ).fetchall()
                 ]
                 return {
@@ -311,7 +317,7 @@ class LeadRepository(ILeadRepository):
         )
 
         analysis: Optional[LeadAnalysis] = None
-        if row["analyzed_at"]:
+        if fetch_relations and row["analyzed_at"]:
             solutions = [
                 ProposedService(**s)
                 for s in json.loads(row["recommended_solutions"] or "[]")
@@ -333,7 +339,7 @@ class LeadRepository(ILeadRepository):
         except ValueError:
             status = LeadStatus.DISCOVERED
 
-        tags = json.loads(row["tags"] or "[]") if "tags" in row.keys() else []
+        tags = json.loads(row["tags"] or "[]") if "tags" in row.keys() and row["tags"] else []
         breakdown = (
             json.loads(row["score_breakdown"] or "{}")
             if "score_breakdown" in row.keys() and row["score_breakdown"]

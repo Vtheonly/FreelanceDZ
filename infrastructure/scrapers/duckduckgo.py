@@ -36,7 +36,7 @@ from domain.value_objects import FreshnessMetadata
 from infrastructure.http.rate_limiter import AsyncRateLimiter, DomainRateLimiter
 from infrastructure.scrapers.base import BaseAsyncScraper
 from infrastructure.scrapers.content_extractor import AdvancedContentExtractor
-from utils.contact_parser import extract_first_email
+from utils.contact_parser import extract_first_email, classify_social_platform
 from utils.freshness_detector import FreshnessDetector
 from utils.phone_validator import SmartPhoneValidator
 from utils.spam_filter import SourcingSpamFilter
@@ -60,7 +60,7 @@ class AsyncDuckDuckGoScraper(BaseAsyncScraper):
         content_extractor: Optional[AdvancedContentExtractor] = None,
         rate_limiter: Optional[AsyncRateLimiter] = None,
         domain_limiter: Optional[DomainRateLimiter] = None,
-        deep_crawl: bool = True,
+        deep_crawl: bool = False,  # Disabled by default for snappy interactive searches
     ) -> None:
         super().__init__(
             client=client,
@@ -204,20 +204,56 @@ class AsyncDuckDuckGoScraper(BaseAsyncScraper):
             freshness=freshness_meta,
         )
 
-        # Phase 2: optionally deep-crawl the target page for richer data.
-        if self._deep_crawl and url:
+        # Check if URL represents a social profile
+        is_social = bool(classify_social_platform(url))
+
+        # Always trigger deep enrichment for social links to pull contact info
+        if (self._deep_crawl or is_social) and url:
             await self._enrich_with_deep_crawl(biz)
 
         return biz
 
     async def _enrich_with_deep_crawl(self, biz: BusinessRaw) -> None:
-        """Fetch the business website and merge structured schema data.
-
-        Mutates ``biz`` in place. Failures are non-fatal — we keep the
-        SERP-level data and just log the miss.
-        """
+        """Fetch the business website and merge structured schema data."""
         if not biz.website:
             return
+            
+        platform = classify_social_platform(biz.website)
+        
+        # Route to specialized social scrapers if the lead is social-only
+        if platform in ("facebook", "instagram", "tiktok"):
+            try:
+                from infrastructure.scrapers.plugins.facebook_plugin import FacebookPlugin
+                from infrastructure.scrapers.plugins.instagram_plugin import InstagramPlugin
+                from infrastructure.scrapers.plugins.tiktok_plugin import TikTokPlugin
+                
+                plugin = None
+                if platform == "facebook":
+                    plugin = FacebookPlugin(self.client)
+                elif platform == "instagram":
+                    plugin = InstagramPlugin(self.client)
+                elif platform == "tiktok":
+                    plugin = TikTokPlugin(self.client)
+                    
+                if plugin:
+                    social_biz = await plugin.scrape_target(biz.website)
+                    if social_biz:
+                        if social_biz.name and len(social_biz.name) > 2:
+                            biz.name = social_biz.name[:200]
+                        if social_biz.phone:
+                            biz.phone = social_biz.phone
+                            biz.phone_metadata = social_biz.phone_metadata
+                        if social_biz.email:
+                            biz.email = social_biz.email
+                        if social_biz.address and social_biz.address != "Unknown":
+                            biz.address = social_biz.address
+                        biz.freshness = social_biz.freshness
+                        biz.social_media_handles = list(set(biz.social_media_handles + [biz.website]))
+                        return
+            except Exception as exc:
+                self._logger.debug("Social plugin enrichment failed for %s: %s", biz.website, exc)
+
+        # Fallback for standard websites
         response = await self._fetch(biz.website, timeout=8.0)
         if response is None:
             return
@@ -233,7 +269,7 @@ class AsyncDuckDuckGoScraper(BaseAsyncScraper):
             merged = list(set((biz.social_media_handles or []) + profile["socials"]))[:10]
             biz.social_media_handles = merged
 
-        # Re-validate any newly discovered phone numbers.
+        # Re-validate newly discovered phone numbers
         raw_phones = " ".join(profile.get("phones", []))
         if raw_phones:
             extra_meta = self._phone_validator.extract_and_validate(raw_phones)
@@ -244,6 +280,6 @@ class AsyncDuckDuckGoScraper(BaseAsyncScraper):
                 biz.phone_metadata = combined
                 biz.phone = combined[0].e164
 
-        # Refresh freshness from the actual page text/headers.
+        # Refresh freshness from actual page content
         headers_dict = dict(response.headers) if hasattr(response, "headers") else None
         biz.freshness = self._freshness.detect(response.text, headers=headers_dict)

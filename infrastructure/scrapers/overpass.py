@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from config.wilayas import get_wilaya_by_name
 from domain.enums import DataSource
 from domain.models import BusinessRaw
 from domain.value_objects import FreshnessMetadata
@@ -96,10 +97,16 @@ class AsyncOverpassScraper(BaseAsyncScraper):
         """Query Overpass for businesses matching the query near ``wilaya``."""
         if not query:
             return []
+            
+        # Defensively skip country-wide searches to avoid throttling
+        if not wilaya:
+            self._logger.warning("Overpass query without wilaya is too heavy — skipping to prevent blocks.")
+            return []
+            
         self._logger.info("Overpass discover: query=%r wilaya=%r limit=%d", query, wilaya, limit)
 
         # Build the Overpass QL query.
-        area_filter = self._area_filter(wilaya)
+        area_decl, area_filter = self._area_filter_and_declaration(wilaya)
         osm_filters = self._osm_filters_for_query(query)
         if not osm_filters:
             self._logger.warning("No OSM tag mapping for query %r — skipping Overpass.", query)
@@ -113,7 +120,7 @@ class AsyncOverpassScraper(BaseAsyncScraper):
                 f'way[{tag_filter}]{area_filter};'
             )
         union = "".join(union_parts)
-        overpass_ql = f"[out:json][timeout:25];({union});out center 80;"
+        overpass_ql = f"[out:json][timeout:25];{area_decl}({union});out center 80;"
 
         # Try each endpoint until one responds.
         for endpoint in OVERPASS_ENDPOINTS:
@@ -138,32 +145,99 @@ class AsyncOverpassScraper(BaseAsyncScraper):
 
     # ------------------------------------------------------------------
 
-    def _area_filter(self, wilaya: Optional[str]) -> str:
-        """Build the ``area[...]`` filter for the Overpass query.
+    def _area_filter_and_declaration(self, wilaya: Optional[str]) -> tuple[str, str]:
+        """Build the area declaration and filter for the Overpass query.
 
-        Falls back to a country-wide query when no wilaya is given.
+        Returns (area_declaration, area_filter).
         """
         if not wilaya:
-            # Algeria's ISO 3166-2 area code in OSM is 3600193111 (relation).
-            return '(area:3600193111)'
-        # Use name-based area lookup. OSM area names for Algerian wilayas
-        # are typically in French.
-        safe = wilaya.replace('"', '\\"')
-        return f'(area["name"="{safe}"]'
+            # Algeria relation area ID is 3600193111
+            return "", "(area:3600193111)"
+
+        # Try to canonicalise name using our wilayas config
+        w = get_wilaya_by_name(wilaya)
+        name_to_use = str(w["name_fr"]) if w else wilaya
+
+        safe = name_to_use.replace('"', '\\"')
+        # Use case-insensitive regex for robustness
+        declaration = f'area["name"~"^{safe}$",i]->.searchArea;'
+        area_filter = "(area.searchArea)"
+        return declaration, area_filter
 
     def _osm_filters_for_query(self, query: str) -> list[str]:
         """Map the user query to one or more OSM tag filters."""
         q = query.lower().strip()
         matches: list[str] = []
-        for tag, _ in _OSM_TAG_TO_INDUSTRY.items():
-            # Match if the industry label (right-hand side) or the tag
-            # value appears in the query.
-            if any(word in tag for word in q.split()):
+
+        # Standard keyword mappings for French, Arabic, and English terms
+        mappings = {
+            "pharmacie": ["amenity=pharmacy"],
+            "pharmacy": ["amenity=pharmacy"],
+            "صيدلية": ["amenity=pharmacy"],
+            "officine": ["amenity=pharmacy"],
+            "clinic": ["amenity=clinic", "amenity=hospital", "amenity=doctors"],
+            "clinique": ["amenity=clinic", "amenity=hospital", "amenity=doctors"],
+            "hospital": ["amenity=hospital"],
+            "hopital": ["amenity=hospital"],
+            "مستشفى": ["amenity=hospital"],
+            "عيادة": ["amenity=clinic", "amenity=doctors"],
+            "doctors": ["amenity=doctors"],
+            "dentist": ["amenity=dentist"],
+            "dentiste": ["amenity=dentist"],
+            "restaurant": ["amenity=restaurant", "amenity=fast_food"],
+            "resto": ["amenity=restaurant", "amenity=fast_food"],
+            "مطعم": ["amenity=restaurant", "amenity=fast_food"],
+            "pizzeria": ["amenity=restaurant"],
+            "cafe": ["amenity=cafe"],
+            "مقهى": ["amenity=cafe"],
+            "bakery": ["shop=bakery"],
+            "boulangerie": ["shop=bakery"],
+            "مخبزة": ["shop=bakery"],
+            "supermarket": ["shop=supermarket"],
+            "supermarche": ["shop=supermarket"],
+            "supérette": ["shop=convenience", "shop=supermarket"],
+            "سوبرماركت": ["shop=supermarket"],
+            "hairdresser": ["shop=hairdresser"],
+            "coiffure": ["shop=hairdresser"],
+            "حلاق": ["shop=hairdresser"],
+            "lawyer": ["office=lawyer"],
+            "avocat": ["office=lawyer"],
+            "محامي": ["office=lawyer"],
+            "real_estate": ["office=real_estate_agent"],
+            "immobilier": ["office=real_estate_agent"],
+            "عقارات": ["office=real_estate_agent"],
+            "car_repair": ["amenity=car_repair", "shop=car_repair"],
+            "mecanicien": ["amenity=car_repair", "shop=car_repair"],
+            "garage": ["amenity=car_repair", "shop=car_repair"],
+            "تصليح سيارات": ["amenity=car_repair"],
+            "plumber": ["craft=plumber"],
+            "plombier": ["craft=plumber"],
+            "ترصيص": ["craft=plumber"],
+        }
+
+        # Check explicit mappings first
+        for key, tags in mappings.items():
+            if key in q or q in key:
+                matches.extend(tags)
+
+        # Substring search fallbacks
+        for tag, industry in _OSM_TAG_TO_INDUSTRY.items():
+            if q in tag.lower() or q in industry.lower():
                 matches.append(tag)
-        # Also allow a generic "shop" fallback for retail queries.
-        if not matches and any(w in q for w in ("shop", "store", "magasin", "hanout")):
+
+        # General shop fallback
+        if not matches and any(w in q for w in ("shop", "store", "magasin", "hanout", "محل", "دكان")):
             matches.append("shop")
-        return matches[:5]  # Cap to avoid huge queries.
+
+        # De-duplicate while preserving order
+        seen: set[str] = set()
+        unique_matches: list[str] = []
+        for m in matches:
+            if m not in seen:
+                seen.add(m)
+                unique_matches.append(m)
+
+        return unique_matches[:5]
 
     def _parse_overpass_response(
         self,
