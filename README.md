@@ -49,152 +49,219 @@ The original FreelanceDZ codebase had a number of architectural flaws that limit
 
 The engine follows **Clean Architecture** / **Hexagonal Architecture** principles:
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        API LAYER (FastAPI)                       │
-│  routes/ · dependencies.py · server.py · templates/             │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │ depends on abstractions only
-┌──────────────────────────────▼───────────────────────────────────┐
-│                      SERVICES LAYER (business)                   │
-│  DiscoveryService · AnalysisService · ScoringService            │
-│  ResolutionService · ExportService · AutonomousInfiniteCrawler  │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │ depends on abstractions only
-┌──────────────────────────────▼───────────────────────────────────┐
-│               INFRASTRUCTURE LAYER (adapters)                    │
-│  http/ · storage/ · llm/ · scrapers/ · entity_resolution/       │
-│  resilience/                                                    │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │ implements abstractions
-┌──────────────────────────────▼───────────────────────────────────┐
-│              CORE LAYER (abstractions + cross-cutting)           │
-│  interfaces.py · exceptions.py · logging_setup.py · lifecycle   │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-┌──────────────────────────────▼───────────────────────────────────┐
-│              DOMAIN LAYER (pure business models)                 │
-│  models.py · enums.py · value_objects.py                        │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph "API Layer (FastAPI)"
+        ROUTES["routes/ · dependencies.py<br/>server.py · templates/"]
+    end
+
+    subgraph "Services Layer"
+        DISCOVERY["DiscoveryService"]
+        ANALYSIS["AnalysisService"]
+        SCORING["ScoringService"]
+        RESOLUTION["ResolutionService"]
+        EXPORT["ExportService"]
+        CRAWLER["InfiniteCrawler"]
+    end
+
+    subgraph "Infrastructure Layer (Adapters)"
+        HTTP["http/ · client_factory.py<br/>rate_limiter.py"]
+        STORAGE["storage/ · database.py<br/>repositories/"]
+        LLM["llm/ · multi-model fallback<br/>cache · prompts"]
+        SCRAPERS["scrapers/ · aggregator<br/>duckduckgo · overpass"]
+        ENTITY_RES["entity_resolution/<br/>blocking · similarity · merger"]
+        RESILIENCE["resilience/<br/>proxy · backoff · block_detection"]
+    end
+
+    subgraph "Core Layer (Abstractions)"
+        INTERFACES["interfaces.py"]
+        EXCEPTIONS["exceptions.py"]
+        LOGGING["logging_setup.py"]
+        LIFECYCLE["lifecycle.py"]
+    end
+
+    subgraph "Domain Layer (Pure Models)"
+        MODELS["models.py · enums.py<br/>value_objects.py"]
+    end
+
+    ROUTES -->|"Depends()"| DISCOVERY
+    ROUTES --> ANALYSIS
+    ROUTES --> SCORING
+    ROUTES --> RESOLUTION
+    ROUTES --> EXPORT
+    ROUTES --> CRAWLER
+
+    DISCOVERY -->|"uses interfaces"| INTERFACES
+    ANALYSIS --> INTERFACES
+    SCORING --> INTERFACES
+    RESOLUTION --> INTERFACES
+    EXPORT --> INTERFACES
+    CRAWLER --> INTERFACES
+
+    INTERFACES -->|"implemented by"| HTTP
+    INTERFACES --> STORAGE
+    INTERFACES --> LLM
+    INTERFACES --> SCRAPERS
+    INTERFACES --> ENTITY_RES
+    INTERFACES --> RESILIENCE
+
+    INTERFACES --> EXCEPTIONS
+    INTERFACES --> LOGGING
+    INTERFACES --> LIFECYCLE
+
+    EXCEPTIONS --> MODELS
+    LOGGING --> MODELS
+    LIFECYCLE --> MODELS
+
+    style ROUTES fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style DISCOVERY fill:#50b86c,stroke:#2d7a46,color:#fff
+    style ANALYSIS fill:#50b86c,stroke:#2d7a46,color:#fff
+    style SCORING fill:#50b86c,stroke:#2d7a46,color:#fff
+    style RESOLUTION fill:#50b86c,stroke:#2d7a46,color:#fff
+    style EXPORT fill:#50b86c,stroke:#2d7a46,color:#fff
+    style CRAWLER fill:#50b86c,stroke:#2d7a46,color:#fff
+    style HTTP fill:#e8a838,stroke:#b07a28,color:#fff
+    style STORAGE fill:#e8a838,stroke:#b07a28,color:#fff
+    style LLM fill:#e8a838,stroke:#b07a28,color:#fff
+    style SCRAPERS fill:#e8a838,stroke:#b07a28,color:#fff
+    style ENTITY_RES fill:#e8a838,stroke:#b07a28,color:#fff
+    style RESILIENCE fill:#e8a838,stroke:#b07a28,color:#fff
+    style INTERFACES fill:#9b59b6,stroke:#6c3483,color:#fff
+    style EXCEPTIONS fill:#9b59b6,stroke:#6c3483,color:#fff
+    style LOGGING fill:#9b59b6,stroke:#6c3483,color:#fff
+    style LIFECYCLE fill:#9b59b6,stroke:#6c3483,color:#fff
+    style MODELS fill:#e74c3c,stroke:#a93226,color:#fff
 ```
 
 **Dependency rule:** every layer depends *inward* only. The domain layer has zero dependencies on anything above it. Infrastructure implements the interfaces defined in core. Services orchestrate infrastructure through those interfaces. The API layer wires concrete implementations into services via FastAPI's `Depends()`.
+
+### Layer Interaction Sequence
+
+```mermaid
+sequenceDiagram
+    participant Client as HTTP Client
+    participant API as API Layer<br/>(FastAPI Routes)
+    participant DI as Dependencies<br/>(Depends())
+    participant SVC as Services Layer
+    participant INF as Infrastructure<br/>(Adapters)
+    participant DB as SQLite
+
+    Client->>API: POST /api/v2/discover
+    API->>DI: Resolve dependencies
+    DI->>SVC: Inject DiscoveryService
+    SVC->>INF: ScraperAggregator.discover_exhaustive()
+    INF->>INF: DuckDuckGo scraping
+    INF->>INF: Overpass OSM query
+    INF->>INF: Content extraction
+    INF->>DB: RawRecordRepository.save()
+    DB-->>INF: upserted record
+    INF-->>SVC: list[BusinessRaw]
+    SVC-->>API: DiscoveryResult
+    API-->>Client: 200 JSON response
+```
 
 ---
 
 ## Project Structure
 
-```
-FreelanceDZ-refactored/
-├── main.py                     # Default entry point (discover pipeline)
-├── cli.py                      # Async CLI (click + rich)
-├── pyproject.toml              # Modern Python packaging
-├── requirements.txt            # Pinned dependencies
-├── .env.example                # Configuration template (no secrets)
-├── .gitignore
-│
-├── config/                     # All tunable parameters
-│   ├── settings.py             # Pydantic-settings, validated, cached
-│   ├── wilayas.py              # 58 Algerian wilayas (FR/AR/EN)
-│   ├── industries.py           # Industry templates with default services
-│   ├── services_catalog.py     # B2B services for heuristic fallback
-│   ├── dialect_matrix.py       # FR/MSA/Darja keyword matrix
-│   └── proxies.py              # Proxy pool parsing
-│
-├── core/                       # Cross-cutting concerns (no business logic)
-│   ├── interfaces.py           # Every abstract contract (ports)
-│   ├── exceptions.py           # Domain-agnostic exception hierarchy
-│   ├── logging_setup.py        # Structured logging (console + JSON)
-│   ├── lifecycle.py            # App bootstrap/teardown context manager
-│   └── constants.py            # Immutable shared constants
-│
-├── domain/                     # Pure business models (no I/O)
-│   ├── models.py               # BusinessRaw, Lead, RawRecord, ResolvedEntity
-│   ├── enums.py                # DataSource, LeadStatus, PhoneType, FreshnessAge
-│   └── value_objects.py        # PhoneDetails, FreshnessMetadata, GeoPoint
-│
-├── utils/                      # Stateless helpers
-│   ├── phone_validator.py      # libphonenumber integration
-│   ├── freshness_detector.py   # Temporal metadata extraction (EN/FR/AR)
-│   ├── spam_filter.py          # Directory/aggregator filtering
-│   ├── query_expander.py       # FR/MSA/Darja query expansion
-│   ├── anti_block_engine.py    # UA rotation, jitter, header diversity
-│   ├── text_utils.py           # String normalisation
-│   ├── url_utils.py            # URL parsing, DDG unwrapping
-│   └── retry.py                # Async exponential-backoff decorator
-│
-├── infrastructure/             # Concrete adapters
-│   ├── http/
-│   │   ├── client_factory.py   # Singleton httpx.AsyncClient pool
-│   │   └── rate_limiter.py     # Global semaphore + per-domain politeness
-│   ├── storage/
-│   │   ├── database.py         # SQLite manager + migration registry
-│   │   ├── schema_v1.sql       # Single authoritative schema
-│   │   └── repositories/
-│   │       ├── raw_record_repo.py
-│   │       ├── resolved_entity_repo.py
-│   │       ├── crawl_queue_repo.py
-│   │       └── lead_repo.py    # Read-side JOIN view
-│   ├── llm/
-│   │   ├── base.py             # Multi-model fallback + caching + heuristic
-│   │   ├── groq_client.py      # Groq OpenAI-compatible adapter
-│   │   ├── openrouter_client.py# OpenRouter fallback adapter
-│   │   ├── factory.py          # Provider selection
-│   │   ├── cache.py            # Content-addressed disk cache
-│   │   ├── prompts.py          # Centralised prompt templates
-│   │   └── fallback_heuristic.py # Rule-based deterministic analyzer
-│   ├── scrapers/
-│   │   ├── base.py             # Abstract async scraper
-│   │   ├── aggregator.py       # Exhaustive paginated orchestrator
-│   │   ├── duckduckgo.py       # Paginated DDG + deep crawl
-│   │   ├── overpass.py         # Async OpenStreetMap
-│   │   ├── social_scraper.py   # Public social profile scraper
-│   │   ├── content_extractor.py# Schema.org JSON-LD parser
-│   │   ├── frontier.py         # Persistent crawl queue facade
-│   │   └── plugins/            # Extensible platform scrapers
-│   │       ├── base_plugin.py
-│   │       ├── facebook_plugin.py
-│   │       ├── instagram_plugin.py
-│   │       └── tiktok_plugin.py
-│   ├── entity_resolution/
-│   │   ├── similarity.py       # Levenshtein, Jaccard, Jaro-Winkler
-│   │   ├── blocking.py         # Trigram blocking (avoids O(N²))
-│   │   ├── merger.py           # Golden-record merger
-│   │   └── graph_resolver.py   # Connected-components clustering
-│   └── resilience/
-│       ├── proxy_orchestrator.py # Stateful proxy pool with health
-│       ├── block_detector.py     # CAPTCHA/WAF fingerprinting
-│       └── backoff.py            # Exponential backoff with jitter
-│
-├── services/                   # Business orchestration
-│   ├── discovery_service.py    # Discover + persist
-│   ├── analysis_service.py     # LLM analysis with fallback
-│   ├── scoring_service.py      # Explainable priority scoring
-│   ├── resolution_service.py   # Entity resolution orchestration
-│   ├── export_service.py       # CSV/JSON export
-│   └── infinite_crawler.py     # Autonomous self-recovering crawler
-│
-├── api/                        # FastAPI server
-│   ├── server.py               # App factory + lifespan
-│   ├── dependencies.py         # DI wiring
-│   ├── routes/                 # One blueprint per resource
-│   │   ├── discovery.py · leads.py · entities.py
-│   │   ├── export.py · crawler.py · analytics.py · health.py
-│   └── templates/
-│       └── dashboard.html      # Enterprise workspace UI
-│
-├── tests/                      # pytest + pytest-asyncio
-│   ├── conftest.py
-│   ├── test_phone_validator.py
-│   ├── test_spam_filter.py
-│   ├── test_query_expander.py
-│   ├── test_freshness.py
-│   ├── test_entity_resolver.py
-│   └── test_storage.py
-│
-└── docker/                     # Containerisation
-    ├── Dockerfile              # Multi-stage build
-    └── docker-compose.yml
+```mermaid
+mindmap
+  root((FreelanceDZ))
+    main.py
+    cli.py
+    pyproject.toml
+    config
+      settings.py
+      wilayas.py
+      industries.py
+      services_catalog.py
+      dialect_matrix.py
+      proxies.py
+    core
+      interfaces.py
+      exceptions.py
+      logging_setup.py
+      lifecycle.py
+      constants.py
+    domain
+      models.py
+      enums.py
+      value_objects.py
+    utils
+      phone_validator.py
+      freshness_detector.py
+      spam_filter.py
+      query_expander.py
+      anti_block_engine.py
+      text_utils.py
+      url_utils.py
+      retry.py
+    infrastructure
+      http
+        client_factory.py
+        rate_limiter.py
+      storage
+        database.py
+        schema_v1.sql
+        repositories
+          raw_record_repo.py
+          resolved_entity_repo.py
+          crawl_queue_repo.py
+          lead_repo.py
+      llm
+        base.py
+        groq_client.py
+        openrouter_client.py
+        factory.py
+        cache.py
+        prompts.py
+        fallback_heuristic.py
+      scrapers
+        base.py
+        aggregator.py
+        duckduckgo.py
+        overpass.py
+        social_scraper.py
+        content_extractor.py
+        frontier.py
+        plugins
+          base_plugin.py
+          facebook_plugin.py
+          instagram_plugin.py
+          tiktok_plugin.py
+      entity_resolution
+        similarity.py
+        blocking.py
+        merger.py
+        graph_resolver.py
+      resilience
+        proxy_orchestrator.py
+        block_detector.py
+        backoff.py
+    services
+      discovery_service.py
+      analysis_service.py
+      scoring_service.py
+      resolution_service.py
+      export_service.py
+      infinite_crawler.py
+    api
+      server.py
+      dependencies.py
+      routes
+        discovery.py
+        leads.py
+        entities.py
+        export.py
+        crawler.py
+        analytics.py
+        health.py
+      templates
+        dashboard.html
+    tests
+    docker
+      Dockerfile
+      docker-compose.yml
 ```
 
 ---
@@ -263,61 +330,364 @@ Blind proxy rotation treats every proxy equally — a proxy throwing CAPTCHAs st
 
 ## Data Flow
 
+### Discovery Pipeline
+
+```mermaid
+flowchart TB
+    USER["User Request:<br/>'Find 30 pharmacies in Oran'"]
+    POST["POST /api/v2/discover"]
+    DISCOVERY["DiscoveryService"]
+
+    subgraph EXPANDER["Query Expansion"]
+        QE["AlgerianQueryExpander"]
+        VARIANTS["['pharmacie', 'صيدلية',<br/>'farmasi', 'ⵓⴷⵎⴰⵙ', ...]"]
+    end
+
+    subgraph AGGREGATOR["ScraperAggregator"]
+        DDG["AsyncDuckDuckGoScraper"]
+        OSM["AsyncOverpassScraper"]
+        SOCIAL["SocialScraper"]
+    end
+
+    subgraph PROCESSING["Per-Result Pipeline"]
+        SPAM["SourcingSpamFilter<br/>is_spam(url, title)"]
+        PHONE["SmartPhoneValidator<br/>libphonenumber"]
+        FRESH["FreshnessDetector<br/>detect(snippet, headers)"]
+        CONTENT["AdvancedContentExtractor<br/>JSON-LD deep crawl"]
+    end
+
+    DEDUP["Deduplicate by fingerprint"]
+    SAVE["RawRecordRepository.save()"]
+    ANALYZE["AnalysisService<br/>LLM Multi-Model Fallback"]
+    SCORE["ScoringService<br/>LeadScoringEngine"]
+    RESOLVE["ResolutionService<br/>Graph Entity Resolver"]
+
+    USER --> POST
+    POST --> DISCOVERY
+    DISCOVERY --> QE
+    QE --> VARIANTS
+
+    VARIANTS --> DDG
+    VARIANTS --> OSM
+    VARIANTS --> SOCIAL
+
+    DDG --> SPAM
+    OSM --> SPAM
+    SOCIAL --> SPAM
+
+    SPAM -->|"not spam"| PHONE
+    SPAM -->|"spam"| DROP["Dropped 🗑️"]
+
+    PHONE --> FRESH
+    FRESH --> CONTENT
+    CONTENT --> DEDUP
+
+    DEDUP --> SAVE
+    SAVE --> ANALYZE
+    ANALYZE --> SCORE
+    SCORE --> RESOLVE
+
+    style USER fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style POST fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style DISCOVERY fill:#50b86c,stroke:#2d7a46,color:#fff
+    style EXPANDER fill:#e8a838,stroke:#b07a28,color:#fff
+    style AGGREGATOR fill:#e8a838,stroke:#b07a28,color:#fff
+    style PROCESSING fill:#9b59b6,stroke:#6c3483,color:#fff
+    style DEDUP fill:#e74c3c,stroke:#a93226,color:#fff
+    style SAVE fill:#1abc9c,stroke:#148f77,color:#fff
+    style ANALYZE fill:#50b86c,stroke:#2d7a46,color:#fff
+    style SCORE fill:#50b86c,stroke:#2d7a46,color:#fff
+    style RESOLVE fill:#50b86c,stroke:#2d7a46,color:#fff
+    style DROP fill:#e74c3c,stroke:#a93226,color:#fff
 ```
-User request: "Find 30 pharmacies in Oran"
-   │
-   ▼
-┌──────────────────────────────────────────────────────────┐
-│  POST /api/v2/discover  →  DiscoveryService              │
-└──────────────────────────────┬───────────────────────────┘
-                               │
-                               ▼
-┌──────────────────────────────────────────────────────────┐
-│  ScraperAggregator.discover_exhaustive()                 │
-│    1. AlgerianQueryExpander.expand("pharmacie")          │
-│       → ["pharmacie", "صيدلية", "farmasi", ...]          │
-│    2. For each variant:                                  │
-│         AsyncDuckDuckGoScraper.discover(variant, ...)    │
-│           ├─ Paginate DDG (up to MAX_SEARCH_PAGES)       │
-│           ├─ SourcingSpamFilter.is_spam(url, title)      │
-│           ├─ SmartPhoneValidator (libphonenumber)        │
-│           ├─ FreshnessDetector.detect(snippet)           │
-│           └─ AdvancedContentExtractor (JSON-LD deep crawl)│
-│         AsyncOverpassScraper.discover(variant, ...)      │
-│           └─ Query OSM for amenity=pharmacy near wilaya  │
-│    3. Deduplicate by fingerprint                          │
-│    4. Return list[BusinessRaw] up to limit               │
-└──────────────────────────────┬───────────────────────────┘
-                               │
-                               ▼
-┌──────────────────────────────────────────────────────────┐
-│  RawRecordRepository.save(biz)                           │
-│    → INSERT INTO raw_records ... ON CONFLICT(fingerprint)│
-│      DO UPDATE SET last_updated, freshness = ...         │
-└──────────────────────────────┬───────────────────────────┘
-                               │
-                               ▼
-┌──────────────────────────────────────────────────────────┐
-│  (async, optional) AnalysisService.analyze_pending()     │
-│    → LLM multi-model fallback → LeadAnalysis             │
-│    → HeuristicAnalyzer if every provider fails           │
-└──────────────────────────────┬───────────────────────────┘
-                               │
-                               ▼
-┌──────────────────────────────────────────────────────────┐
-│  ScoringService.score_all()                              │
-│    → LeadScoringEngine.calculate_score(lead)             │
-│    → explain_score() returns per-factor breakdown        │
-└──────────────────────────────┬───────────────────────────┘
-                               │
-                               ▼
-┌──────────────────────────────────────────────────────────┐
-│  (on demand) ResolutionService.resolve_all()             │
-│    → TrigramBlocker.candidate_pairs(records)             │
-│    → GraphEntityResolver: weighted similarity + BFS      │
-│    → GoldenRecordMerger.merge(cluster)                   │
-│    → INSERT INTO resolved_entities ...                   │
-└──────────────────────────────────────────────────────────┘
+
+### Entity Resolution Pipeline
+
+```mermaid
+sequenceDiagram
+    participant TRIGRAM as TrigramBlocker
+    participant SIM as SimilarityScorer
+    participant GRAPH as GraphEntityResolver
+    participant MERGER as GoldenRecordMerger
+    participant DB as SQLite
+
+    Note over TRIGRAM,DB: ResolutionService.resolve_all()
+
+    DB->>TRIGRAM: Load all raw_records
+    TRIGRAM->>TRIGRAM: Generate trigrams for each name
+    TRIGRAM->>TRIGRAM: Build inverted index<br/>(trigram → record_ids)
+    TRIGRAM->>SIM: candidate_pairs (blocked groups)
+
+    loop For each candidate pair
+        SIM->>SIM: Levenshtein distance (name)
+        SIM->>SIM: Jaccard similarity (address)
+        SIM->>SIM: Jaro-Winkler (phone)
+        SIM->>SIM: Weighted composite score
+        SIM-->>GRAPH: similarity_matrix
+    end
+
+    GRAPH->>GRAPH: Build adjacency graph
+    GRAPH->>GRAPH: BFS connected-components
+    GRAPH->>GRAPH: Cluster assignment
+    GRAPH-->>MERGER: clusters
+
+    loop For each cluster
+        MERGER->>MERGER: Select canonical name (most frequent)
+        MERGER->>MERGER: Merge phones (deduplicate)
+        MERGER->>MERGER: Merge addresses (prefer JSON-LD)
+        MERGER->>MERGER: Collect raw_record_ids lineage
+        MERGER->>MERGER: Compute confidence score
+        MERGER-->>DB: UPSERT resolved_entity
+    end
+
+    DB-->>MERGER: golden records stored
+    Note over MERGER: Lineage preserved in<br/>resolved_entities.raw_record_ids
+```
+
+### LLM Multi-Model Fallback Chain
+
+```mermaid
+flowchart LR
+    START["AnalysisService<br/>analyze_pending()"]
+    CACHE["Content-Addressed<br/>Disk Cache"]
+
+    subgraph TIER1["Tier 1: Groq Fast"]
+        M1["llama-3.1-8b-instant<br/>🟢 Low latency"]
+    end
+
+    subgraph TIER2["Tier 2: Groq Large"]
+        M2["llama-3.1-70b-versatile<br/>🟡 Higher quality"]
+    end
+
+    subgraph TIER3["Tier 3: OpenRouter"]
+        M3["OpenRouter Fallback<br/>🟠 Any available model"]
+    end
+
+    subgraph FALLBACK["Heuristic Fallback"]
+        HEUR["Rule-Based Analyzer<br/>🔴 Deterministic"]
+    end
+
+    START --> CACHE
+    CACHE -->|"cache miss"| TIER1
+    CACHE -->|"cache hit"| DONE["Return cached result"]
+
+    TIER1 -->|"success"| DONE
+    TIER1 -->|"429 / timeout"| TIER2
+
+    TIER2 -->|"success"| DONE
+    TIER2 -->|"429 / timeout"| TIER3
+
+    TIER3 -->|"success"| DONE
+    TIER3 -->|"all providers down"| HEUR
+
+    HEUR --> DONE
+
+    style START fill:#50b86c,stroke:#2d7a46,color:#fff
+    style CACHE fill:#1abc9c,stroke:#148f77,color:#fff
+    style TIER1 fill:#2ecc71,stroke:#1d8348,color:#fff
+    style TIER2 fill:#f1c40f,stroke:#b7950b,color:#000
+    style TIER3 fill:#e67e22,stroke:#b85e0a,color:#fff
+    style FALLBACK fill:#e74c3c,stroke:#a93226,color:#fff
+    style DONE fill:#9b59b6,stroke:#6c3483,color:#fff
+```
+
+### Infinite Crawler State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE: System start
+
+    IDLE --> BOOTSTRAPPING: POST /crawler/start
+    BOOTSTRAPPING --> CRAWLING: Frontier seeded
+
+    state CRAWLING {
+        [*] --> FETCH_URL
+        FETCH_URL --> EXTRACT_LINKS
+        EXTRACT_LINKS --> FILTER_URLS
+        FILTER_URLS --> ENQUEUE: New URLs found
+        FILTER_URLS --> FETCH_URL: No new URLs
+        ENQUEUE --> FETCH_URL
+    }
+
+    CRAWLING --> BLOCK_DETECTED: CAPTCHA / WAF / 403
+    BLOCK_DETECTED --> ROTATE_PROXY: Block fingerprint matched
+    ROTATE_PROXY --> BACKOFF: Exponential backoff + jitter
+    BACKOFF --> CRAWLING: Proxy health restored
+
+    CRAWLING --> IDLE: POST /crawler/stop
+    CRAWLING --> IDLE: All URLs exhausted
+
+    CRAWLING --> CRASH_RECOVERY: Process killed
+    CRASH_RECOVERY --> CRAWLING: Re-queue stalled<br/>processing rows
+
+    note right of CRAWLING
+        Frontier: SQLite-backed queue
+        Politeness: per-domain delay
+        Max failures per URL: 3
+    end note
+```
+
+### Database Schema (ER Diagram)
+
+```mermaid
+erDiagram
+    raw_records ||--o{ resolved_entities : "lineage (JSON array)"
+    raw_records ||--o{ crawl_queue : "source"
+
+    raw_records {
+        int id PK
+        text fingerprint UK "name+wilaya+phone+website hash"
+        text source "duckduckgo | overpass | social"
+        text name "Business name"
+        text wilaya "Algerian wilaya"
+        text phone "Primary phone"
+        text website "Business website"
+        text address "Full address"
+        text email "Email if found"
+        text social_links "JSON array"
+        text raw_data "Full scrape payload"
+        text freshness "JSON: FreshnessMetadata"
+        text detected_language "en | fr | ar"
+        datetime first_seen
+        datetime last_updated
+        int scrape_count
+    }
+
+    resolved_entities {
+        int id PK
+        text canonical_name "Most frequent name"
+        text wilaya
+        text phones "JSON array (deduplicated)"
+        text website
+        text address "Best quality address"
+        text social_links "Merged from all sources"
+        text raw_record_ids "JSON array → raw_records"
+        float confidence_score "0.0 - 1.0"
+        text industry "Classified by LLM"
+        text services "JSON array"
+        text tags "User-assigned tags"
+        text status "discovered | analyzed | scored | contacted | rejected | verified"
+        datetime last_resolved
+    }
+
+    crawl_queue {
+        int id PK
+        text url
+        text source
+        int depth
+        text status "pending | processing | done | failed"
+        int retry_count
+        text proxy_used
+        datetime enqueued_at
+        datetime processing_started
+        datetime completed_at
+        text error_message
+    }
+
+    schema_migrations {
+        int version PK
+        text description
+        datetime applied_at
+    }
+```
+
+### Scraper Aggregator Architecture
+
+```mermaid
+flowchart TB
+    AGG["ScraperAggregator<br/>discover_exhaustive()"]
+
+    subgraph SCRAPERS["Registered Scrapers"]
+        DDG["DuckDuckGoScraper<br/>🔍 SERP discovery"]
+        OSM["OverpassScraper<br/>🗺️ OpenStreetMap"]
+        SOC["SocialScraper<br/>📱 Public profiles"]
+    end
+
+    subgraph PLUGINS["Platform Plugins"]
+        FB["FacebookPlugin<br/>📘"]
+        IG["InstagramPlugin<br/>📸"]
+        TT["TikTokPlugin<br/>🎵"]
+    end
+
+    subgraph EXTRACTORS["Content Extractors"]
+        JSONLD["JSON-LD Parser<br/>schema.org structured data"]
+        DOM["DOM Parser<br/>Fallback extraction"]
+        PHONE["libphonenumber<br/>Phone validation"]
+    end
+
+    subgraph FILTERS["Filters & Enrichers"]
+        SPAM["SpamFilter<br/>Directory detection"]
+        FRESH["FreshnessDetector<br/>Temporal metadata"]
+        DEDUP["Deduplicator<br/>Fingerprint matching"]
+    end
+
+    AGG -->|"iterate query variants"| SCRAPERS
+    AGG -->|"platform-specific"| PLUGINS
+
+    DDG -->|"deep crawl URLs"| EXTRACTORS
+    OSM -->|"OSM tags"| EXTRACTORS
+    SOC -->|"profile pages"| EXTRACTORS
+    FB --> EXTRACTORS
+    IG --> EXTRACTORS
+    TT --> EXTRACTORS
+
+    EXTRACTORS --> FILTERS
+    FILTERS -->|"clean results"| AGG
+
+    AGG -->|"list[BusinessRaw]"| OUTPUT["DiscoveryService"]
+
+    style AGG fill:#e74c3c,stroke:#a93226,color:#fff
+    style SCRAPERS fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style PLUGINS fill:#9b59b6,stroke:#6c3483,color:#fff
+    style EXTRACTORS fill:#e8a838,stroke:#b07a28,color:#fff
+    style FILTERS fill:#1abc9c,stroke:#148f77,color:#fff
+    style OUTPUT fill:#50b86c,stroke:#2d7a46,color:#fff
+```
+
+### Proxy Orchestrator Health Management
+
+```mermaid
+flowchart LR
+    POOL["Proxy Pool<br/>Stateful Orchestrator"]
+
+    subgraph PROXIES["Proxy Instances"]
+        P1["Proxy 1<br/>Health: 92 ✅"]
+        P2["Proxy 2<br/>Health: 45 ⚠️"]
+        P3["Proxy 3<br/>Health: 78 ✅"]
+        P4["Proxy 4<br/>Health: 12 ❌"]
+    end
+
+    subgraph SELECTION["Selection Strategy"]
+        WEIGHTED["Weighted Random<br/>by health score"]
+        EXCLUDE["Exclude health < 30"]
+    end
+
+    subgraph FEEDBACK["Health Feedback"]
+        SUCCESS["+5 on success"]
+        FAILURE["-15 on failure"]
+        CAPTCHA["-30 on CAPTCHA"]
+        TIMEOUT["-10 on timeout"]
+    end
+
+    subgraph RECOVERY["Recovery Mechanism"]
+        BURST["Recovery Burst<br/>Reset all to 50"]
+        ROTATE["Rotate out unhealthy"]
+    end
+
+    POOL --> PROXIES
+    PROXIES --> SELECTION
+    SELECTION -->|"selected proxy"| REQUEST["HTTP Request"]
+    REQUEST --> FEEDBACK
+    FEEDBACK --> POOL
+    FEEDBACK -->|"health < 30"| RECOVERY
+    RECOVERY --> POOL
+
+    style POOL fill:#e74c3c,stroke:#a93226,color:#fff
+    style PROXIES fill:#e8a838,stroke:#b07a28,color:#fff
+    style SELECTION fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style FEEDBACK fill:#1abc9c,stroke:#148f77,color:#fff
+    style RECOVERY fill:#9b59b6,stroke:#6c3483,color:#fff
+    style REQUEST fill:#50b86c,stroke:#2d7a46,color:#fff
 ```
 
 ---
@@ -549,6 +919,52 @@ cd docker
 docker-compose up -d
 # API at http://localhost:8080
 # Health at http://localhost:8080/health
+```
+
+### Deployment Architecture
+
+```mermaid
+graph TB
+    subgraph HOST["Docker Host"]
+        subgraph CONTAINER["freelancedz Container"]
+            UVICORN["Uvicorn ASGI Server<br/>port 8080"]
+            FASTAPI["FastAPI App<br/>API Routes + Dashboard"]
+            SQLITE["SQLite Database<br/>persistent volume"]
+            CACHE["LLM Response Cache<br/>disk cache"]
+        end
+    end
+
+    subgraph EXTERNAL["External Services"]
+        DDG_API["DuckDuckGo<br/>Search API"]
+        OSM_API["Overpass API<br/>OpenStreetMap"]
+        GROQ["Groq API<br/>LLM Inference"]
+        OPENROUTER["OpenRouter<br/>LLM Fallback"]
+        PROXY_POOL["Proxy Pool<br/>HTTP/HTTPS"]
+    end
+
+    BROWSER["Browser<br/>Dashboard UI"]
+    CLIENT["API Client<br/>curl / Postman"]
+
+    BROWSER -->|"HTTP :8080"| UVICORN
+    CLIENT -->|"HTTP :8080"| UVICORN
+    UVICORN --> FASTAPI
+    FASTAPI --> SQLITE
+    FASTAPI --> CACHE
+    FASTAPI -->|"scrape"| DDG_API
+    FASTAPI -->|"scrape"| OSM_API
+    FASTAPI -->|"scrape"| PROXY_POOL
+    FASTAPI -->|"analyze"| GROQ
+    FASTAPI -->|"fallback"| OPENROUTER
+
+    style HOST fill:#2c3e50,stroke:#1a252f,color:#fff
+    style CONTAINER fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style EXTERNAL fill:#e8a838,stroke:#b07a28,color:#fff
+    style BROWSER fill:#50b86c,stroke:#2d7a46,color:#fff
+    style CLIENT fill:#50b86c,stroke:#2d7a46,color:#fff
+    style UVICORN fill:#e74c3c,stroke:#a93226,color:#fff
+    style FASTAPI fill:#e74c3c,stroke:#a93226,color:#fff
+    style SQLITE fill:#1abc9c,stroke:#148f77,color:#fff
+    style CACHE fill:#1abc9c,stroke:#148f77,color:#fff
 ```
 
 ### Manual
