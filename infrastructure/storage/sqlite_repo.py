@@ -64,20 +64,20 @@ class SQLiteLeadRepository(ILeadRepository):
         finally:
             conn.close()
 
-    # ------------------------------------------------------------------
-    # Schema
-    # ------------------------------------------------------------------
-
+    # Update init_schema to safely auto-migrate older database files
     def init_schema(self) -> None:
         schema_sql = _SCHEMA_PATH.read_text(encoding="utf-8")
         with self._conn() as c:
             c.executescript(schema_sql)
+        # Migration: dynamically add 'tags' column to businesses table if not exists
+        try:
+            with self._conn() as c:
+                c.execute("ALTER TABLE businesses ADD COLUMN tags TEXT;")
+        except Exception:
+            pass # Column already exists
         self._logger.debug("Schema initialised at %s", self._db_path)
 
-    # ------------------------------------------------------------------
-    # Writes
-    # ------------------------------------------------------------------
-
+    # Update save_business to write initial blank tag JSON:
     def save_business(self, business: BusinessRaw) -> Optional[int]:
         """Insert a business, skip on duplicate fingerprint. Return id (or None)."""
         fp = business.fingerprint()
@@ -94,13 +94,13 @@ class SQLiteLeadRepository(ILeadRepository):
                 """INSERT INTO businesses
                    (fingerprint, name, industry, wilaya, address, website, phone, email,
                     social_media_handles, rating, review_count, latitude, longitude,
-                    source, source_url, discovered_at, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    source, source_url, tags, discovered_at, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     fp, business.name, business.industry, business.wilaya, business.address,
                     business.website, business.phone, business.email, social_json,
                     business.rating, business.review_count, business.latitude, business.longitude,
-                    business.source.value, business.source_url,
+                    business.source.value, business.source_url, "[]",
                     business.discovered_at.isoformat() if business.discovered_at else now,
                     now, now,
                 ),
@@ -115,6 +115,88 @@ class SQLiteLeadRepository(ILeadRepository):
             )
         self._logger.debug("Saved business id=%d (%s)", business_id, business.name)
         return business_id
+
+    # Update _base_query to include b.tags:
+    def _base_query(self) -> str:
+        return """
+            SELECT
+                b.id, b.name, b.industry, b.wilaya, b.address, b.website, b.phone, b.email,
+                b.social_media_handles, b.rating, b.review_count, b.latitude, b.longitude,
+                b.source, b.source_url, b.tags, b.discovered_at, b.created_at, b.updated_at,
+                a.pain_points, a.recommended_solutions, a.digital_presence_score,
+                a.pitch_angles, a.estimated_monthly_revenue_usd, a.analysis_model,
+                a.from_cache, a.analyzed_at,
+                s.priority_score, s.status, s.computed_at
+            FROM businesses b
+            LEFT JOIN analyses  a ON a.business_id = b.id
+            LEFT JOIN lead_scores s ON s.business_id = b.id
+        """
+
+    # Update _row_to_lead mapping:
+    def _row_to_lead(self, row: sqlite3.Row) -> Lead:
+        row_dict = dict(row)
+        b_id = row_dict["id"]
+        # Decode business.
+        social = json.loads(row_dict["social_media_handles"] or "[]")
+        business = BusinessRaw(
+            name=row_dict["name"],
+            industry=row_dict["industry"],
+            wilaya=row_dict["wilaya"],
+            address=row_dict["address"],
+            website=row_dict["website"],
+            phone=row_dict["phone"],
+            email=row_dict["email"],
+            social_media_handles=social,
+            rating=float(row_dict["rating"] or 0.0),
+            review_count=int(row_dict["review_count"] or 0),
+            latitude=row_dict["latitude"],
+            longitude=row_dict["longitude"],
+            source=DataSource(row_dict["source"]),
+            source_url=row_dict["source_url"],
+            discovered_at=datetime.fromisoformat(row_dict["discovered_at"]) if row_dict["discovered_at"] else None,
+        )
+
+        analysis: Optional[LeadAnalysis] = None
+        if row_dict.get("analyzed_at"):
+            solutions_data = json.loads(row_dict["recommended_solutions"] or "[]")
+            solutions = [ProposedService(**s) for s in solutions_data]
+            analysis = LeadAnalysis(
+                pain_points=json.loads(row_dict["pain_points"] or "[]"),
+                recommended_solutions=solutions,
+                digital_presence_score=int(row_dict["digital_presence_score"] or 50),
+                pitch_angles=json.loads(row_dict["pitch_angles"] or "[]"),
+                estimated_monthly_revenue_usd=row_dict["estimated_monthly_revenue_usd"],
+                analysis_model=row_dict["analysis_model"],
+                from_cache=bool(row_dict["from_cache"]),
+                analyzed_at=datetime.fromisoformat(row_dict["analyzed_at"]),
+            )
+
+        status_str = row_dict.get("status") or LeadStatus.DISCOVERED.value
+        try:
+            status = LeadStatus(status_str)
+        except ValueError:
+            status = LeadStatus.DISCOVERED
+
+        tags_json = row_dict.get("tags") or "[]"
+        tags = json.loads(tags_json)
+
+        return Lead(
+            id=b_id,
+            business=business,
+            analysis=analysis,
+            priority_score=float(row_dict.get("priority_score") or 0.0),
+            status=status,
+            tags=tags,
+            created_at=datetime.fromisoformat(row_dict["created_at"]) if row_dict.get("created_at") else None,
+            updated_at=datetime.fromisoformat(row_dict["updated_at"]) if row_dict.get("updated_at") else None,
+        )
+
+    # Add the concrete implementation for tag writes:
+    def set_tags(self, business_id: int, tags: List[str]) -> None:
+        tags_json = json.dumps(tags, ensure_ascii=False)
+        with self._conn() as c:
+            c.execute("UPDATE businesses SET tags = ?, updated_at = ? WHERE id = ?", (tags_json, _now_iso(), business_id))
+
 
     def attach_analysis(self, business_id: int, analysis: LeadAnalysis) -> None:
         solutions_json = json.dumps(
@@ -191,75 +273,6 @@ class SQLiteLeadRepository(ILeadRepository):
     # Reads
     # ------------------------------------------------------------------
 
-    def _row_to_lead(self, row: sqlite3.Row) -> Lead:
-        # Convert to plain dict so we can use `.get()` safely.
-        row = dict(row)
-        b_id = row["id"]
-        # Decode business.
-        social = json.loads(row["social_media_handles"] or "[]")
-        business = BusinessRaw(
-            name=row["name"],
-            industry=row["industry"],
-            wilaya=row["wilaya"],
-            address=row["address"],
-            website=row["website"],
-            phone=row["phone"],
-            email=row["email"],
-            social_media_handles=social,
-            rating=float(row["rating"] or 0.0),
-            review_count=int(row["review_count"] or 0),
-            latitude=row["latitude"],
-            longitude=row["longitude"],
-            source=DataSource(row["source"]),
-            source_url=row["source_url"],
-            discovered_at=datetime.fromisoformat(row["discovered_at"]) if row["discovered_at"] else None,
-        )
-
-        analysis: Optional[LeadAnalysis] = None
-        if row.get("analyzed_at"):
-            solutions_data = json.loads(row["recommended_solutions"] or "[]")
-            solutions = [ProposedService(**s) for s in solutions_data]
-            analysis = LeadAnalysis(
-                pain_points=json.loads(row["pain_points"] or "[]"),
-                recommended_solutions=solutions,
-                digital_presence_score=int(row["digital_presence_score"] or 50),
-                pitch_angles=json.loads(row["pitch_angles"] or "[]"),
-                estimated_monthly_revenue_usd=row["estimated_monthly_revenue_usd"],
-                analysis_model=row["analysis_model"],
-                from_cache=bool(row["from_cache"]),
-                analyzed_at=datetime.fromisoformat(row["analyzed_at"]),
-            )
-
-        status_str = row.get("status") or LeadStatus.DISCOVERED.value
-        try:
-            status = LeadStatus(status_str)
-        except ValueError:
-            status = LeadStatus.DISCOVERED
-
-        return Lead(
-            id=b_id,
-            business=business,
-            analysis=analysis,
-            priority_score=float(row.get("priority_score") or 0.0),
-            status=status,
-            created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
-            updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
-        )
-
-    def _base_query(self) -> str:
-        return """
-            SELECT
-                b.id, b.name, b.industry, b.wilaya, b.address, b.website, b.phone, b.email,
-                b.social_media_handles, b.rating, b.review_count, b.latitude, b.longitude,
-                b.source, b.source_url, b.discovered_at, b.created_at, b.updated_at,
-                a.pain_points, a.recommended_solutions, a.digital_presence_score,
-                a.pitch_angles, a.estimated_monthly_revenue_usd, a.analysis_model,
-                a.from_cache, a.analyzed_at,
-                s.priority_score, s.status, s.computed_at
-            FROM businesses b
-            LEFT JOIN analyses  a ON a.business_id = b.id
-            LEFT JOIN lead_scores s ON s.business_id = b.id
-        """
 
     def list_unanalyzed(self, limit: int = 100) -> List[Lead]:
         sql = self._base_query() + " WHERE a.business_id IS NULL ORDER BY b.created_at ASC LIMIT ?"

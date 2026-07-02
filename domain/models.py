@@ -125,7 +125,6 @@ class LeadAnalysis(BaseModel):
     )
     from_cache: bool = Field(default=False, description="True if served from disk cache")
 
-
 class Lead(BaseModel):
     """A complete lead: raw business + (optional) analysis + score."""
 
@@ -136,6 +135,7 @@ class Lead(BaseModel):
     analysis: Optional[LeadAnalysis] = None
     priority_score: float = Field(default=0.0, ge=0.0, le=100.0)
     status: LeadStatus = Field(default=LeadStatus.DISCOVERED)
+    tags: List[str] = Field(default_factory=list, description="Custom labels applied by user")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -150,6 +150,7 @@ class Lead(BaseModel):
         return round(
             sum(s.estimated_value_usd for s in self.analysis.recommended_solutions), 2
         )
+
 
 
 # ============================================================================

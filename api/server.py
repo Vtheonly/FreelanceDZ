@@ -1,13 +1,4 @@
-"""FastAPI dashboard — browse, search, and inspect leads in the browser.
-
-Routes:
-  GET  /                    — HTML dashboard (Jinja2 template)
-  GET  /api/leads           — JSON list of leads (filters: wilaya, industry, min_score, limit, offset)
-  GET  /api/leads/{id}      — JSON detail for a single lead
-  GET  /api/stats           — JSON aggregate stats
-  GET  /api/search?q=...    — JSON full-text search
-  POST /api/leads/{id}/status — Update lead status (contacted | rejected | ...)
-"""
+"""FastAPI dashboard — browse, search, and inspect leads in the browser."""
 
 from __future__ import annotations
 
@@ -22,12 +13,18 @@ from pydantic import BaseModel
 from core.logging_setup import configure_logging
 from domain.models import LeadStatus
 from infrastructure.storage.sqlite_repo import SQLiteLeadRepository
+from infrastructure.scrapers.overpass import OverpassScraper
+from infrastructure.scrapers.duckduckgo import DuckDuckGoScraper
+from infrastructure.scrapers.mock import MockScraper
+from infrastructure.scrapers.aggregator import ScraperAggregator
+from infrastructure.llm.factory import build_llm_client
+from services.pipeline import ProspectingPipeline
+from services.analyzer import LeadAnalyzerService
+from services.scorer import LeadScoringEngine
+from config.wilayas import all_wilaya_names
 
-
-# Configure logging the same way the CLI does.
 configure_logging(level="INFO", log_dir=Path("data/logs"))
 
-# Wire up FastAPI.
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -37,30 +34,143 @@ app = FastAPI(
     version="1.0.0",
 )
 
-
 def _repo() -> SQLiteLeadRepository:
-    """Build a fresh repository per request (SQLite handles concurrency)."""
     return SQLiteLeadRepository()
 
+class DiscoverRequest(BaseModel):
+    query: str
+    wilaya: Optional[str] = None
+    limit: int = 10
+    enable_overpass: bool = True
+    enable_ddg: bool = True
+    enable_mock: bool = True
+
+class BatchAnalyzeRequest(BaseModel):
+    limit: int = 5
+
+class TagsUpdate(BaseModel):
+    tags: list[str]
+
+class StatusUpdate(BaseModel):
+    status: str
 
 # ----------------------------------------------------------------------------
-#  HTML pages
+#  HTML Pages & Wilayas Catalog List
 # ----------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    """Main dashboard page — loads data via /api/* endpoints from JS."""
     return TEMPLATES.TemplateResponse(request=request, name="dashboard.html")
 
+@app.get("/api/wilayas")
+def get_wilayas():
+    """Retrieve all 58 Algerian wilaya names."""
+    return {"wilayas": all_wilaya_names()}
 
 # ----------------------------------------------------------------------------
-#  JSON API
+#  Discovery Crawl & Custom Label Tag Endpoints
+# ----------------------------------------------------------------------------
+
+@app.post("/api/discover")
+def trigger_discovery(body: DiscoverRequest):
+    """Launch search aggregator with custom modules in real-time and save matching leads."""
+    repo = _repo()
+    scrapers = []
+    if body.enable_overpass:
+        scrapers.append(OverpassScraper())
+    if body.enable_ddg:
+        scrapers.append(DuckDuckGoScraper())
+    if body.enable_mock:
+        scrapers.append(MockScraper())
+        
+    if not scrapers:
+        scrapers.append(MockScraper())
+        
+    scraper = ScraperAggregator(scrapers=scrapers)
+    
+    try:
+        llm = build_llm_client()
+    except Exception:
+        llm = None
+    
+    pipeline = ProspectingPipeline(scraper=scraper, llm=llm, repo=repo)
+    new_count = pipeline.discover(query=body.query, wilaya=body.wilaya, limit=body.limit)
+    return {"success": True, "new_leads_count": new_count}
+
+@app.post("/api/leads/{lead_id}/tags")
+def update_tags(lead_id: int, body: TagsUpdate):
+    """Update custom labels/tags applied to the lead."""
+    repo = _repo()
+    lead = repo.get_lead(lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    repo.set_tags(lead_id, body.tags)
+    return {"ok": True, "id": lead_id, "tags": body.tags}
+
+# ----------------------------------------------------------------------------
+#  Direct UI Real-Time Analysis & Global Pipeline Commands
+# ----------------------------------------------------------------------------
+
+@app.post("/api/leads/{lead_id}/analyze")
+def analyze_single_lead(lead_id: int):
+    """Trigger LLM analysis for a single lead, recalculate its score, and save both."""
+    repo = _repo()
+    lead = repo.get_lead(lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    try:
+        llm = build_llm_client()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM configuration error: {e}")
+        
+    # Analyze the business
+    analyzer = LeadAnalyzerService(llm=llm, repo=repo)
+    analysis = llm.analyze_business_needs(lead.business)
+    repo.attach_analysis(lead_id, analysis)
+    
+    # Retrieve updated lead and recalculate prioritize score
+    updated_lead = repo.get_lead(lead_id)
+    scorer = LeadScoringEngine()
+    score = scorer.calculate_score(updated_lead)
+    breakdown = scorer.explain_score(updated_lead)
+    repo.update_score(lead_id, score, breakdown)
+    
+    return {"success": True, "score": score, "lead": _lead_detail(updated_lead)}
+
+@app.post("/api/analyze-pending")
+def analyze_pending_leads(body: BatchAnalyzeRequest):
+    """Trigger batch LLM analysis on unanalyzed database rows, then rescore them."""
+    repo = _repo()
+    try:
+        llm = build_llm_client()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM configuration error: {e}")
+        
+    analyzer = LeadAnalyzerService(llm=llm, repo=repo)
+    analyzed_count = analyzer.analyze_pending(limit=body.limit)
+    
+    # Re-evaluate database priority scores
+    pipeline = ProspectingPipeline(scraper=ScraperAggregator(), llm=llm, repo=repo)
+    pipeline.score(limit=500)
+    
+    return {"success": True, "analyzed_count": analyzed_count}
+
+@app.post("/api/score-all")
+def score_all_leads():
+    """Recalculate lead scoring across the entire database."""
+    repo = _repo()
+    pipeline = ProspectingPipeline(scraper=ScraperAggregator(), llm=None, repo=repo)
+    scored_count = pipeline.score(limit=1000)
+    return {"success": True, "scored_count": scored_count}
+
+# ----------------------------------------------------------------------------
+#  Core JSON endpoints
 # ----------------------------------------------------------------------------
 
 @app.get("/api/stats")
 def stats():
     return _repo().stats()
-
 
 @app.get("/api/leads")
 def list_leads(
@@ -81,7 +191,6 @@ def list_leads(
         "leads": [_lead_summary(l) for l in leads],
     }
 
-
 @app.get("/api/leads/{lead_id}")
 def get_lead(lead_id: int):
     lead = _repo().get_lead(lead_id)
@@ -89,16 +198,10 @@ def get_lead(lead_id: int):
         raise HTTPException(status_code=404, detail="Lead not found")
     return _lead_detail(lead)
 
-
 @app.get("/api/search")
 def search(q: str = Query(..., min_length=1), limit: int = Query(20, ge=1, le=100)):
     leads = _repo().search(term=q, limit=limit)
     return {"count": len(leads), "leads": [_lead_summary(l) for l in leads]}
-
-
-class StatusUpdate(BaseModel):
-    status: str
-
 
 @app.post("/api/leads/{lead_id}/status")
 def update_status(lead_id: int, body: StatusUpdate):
@@ -113,11 +216,9 @@ def update_status(lead_id: int, body: StatusUpdate):
     repo.set_status(lead_id, status)
     return {"ok": True, "id": lead_id, "status": status.value}
 
-
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
-
 
 # ----------------------------------------------------------------------------
 #  Serialisation helpers
@@ -137,6 +238,7 @@ def _lead_summary(lead) -> dict:
         "source": lead.business.source.value,
         "priority_score": lead.priority_score,
         "status": lead.status.value,
+        "tags": getattr(lead, "tags", []),
         "digital_presence_score": lead.analysis.digital_presence_score if lead.analysis else None,
         "estimated_value_usd": lead.total_estimated_value_usd,
         "top_service": (
@@ -145,7 +247,6 @@ def _lead_summary(lead) -> dict:
             else None
         ),
     }
-
 
 def _lead_detail(lead) -> dict:
     summary = _lead_summary(lead)

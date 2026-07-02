@@ -1,48 +1,98 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DZ Sales Intelligence — Dashboard</title>
+    <title>DZ Sales Intelligence — Enterprise Lead Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
     <style>
         :root {
-            --bg: #0f172a;
-            --bg-elev: #1e293b;
-            --bg-elev2: #334155;
-            --fg: #e2e8f0;
+            --bg-main: #0b0f19;
+            --bg-card: #151b2c;
+            --bg-card-hover: #1d263b;
+            --bg-input: #0f1322;
+            --border-color: #242f47;
+            --border-hover: #3b4e75;
+            --fg-main: #f8fafc;
             --fg-muted: #94a3b8;
-            --accent: #06b6d4;
-            --accent2: #8b5cf6;
+            --fg-dim: #64748b;
+
+            --cyan: #06b6d4;
+            --cyan-glow: rgba(6, 182, 212, 0.15);
+            --violet: #8b5cf6;
+            --violet-glow: rgba(139, 92, 246, 0.15);
             --green: #10b981;
+            --green-glow: rgba(16, 185, 129, 0.15);
             --yellow: #f59e0b;
-            --red: #ef4444;
-            --border: #334155;
-            --radius: 12px;
+            --yellow-glow: rgba(245, 158, 11, 0.15);
+            --red: #f43f5e;
+            --red-glow: rgba(244, 63, 94, 0.15);
+
+            --font-stack: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            --radius-lg: 12px;
+            --radius-md: 8px;
+            --radius-sm: 4px;
+            --transition-smooth: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--fg);
+            font-family: var(--font-stack);
+            background-color: var(--bg-main);
+            color: var(--fg-main);
             min-height: 100vh;
             padding: 24px;
+            line-height: 1.5;
+            overflow-x: hidden;
         }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-main);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: var(--radius-sm);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--border-hover);
+        }
+
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 24px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid var(--border);
+            padding-bottom: 18px;
+            border-bottom: 1px solid var(--border-color);
         }
+
         h1 {
-            font-size: 28px;
-            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, var(--cyan), var(--violet));
             -webkit-background-clip: text;
             background-clip: text;
             -webkit-text-fill-color: transparent;
-            font-weight: 800;
         }
+
         h1 small {
             display: block;
             font-size: 13px;
@@ -51,54 +101,221 @@
             margin-top: 4px;
             -webkit-text-fill-color: var(--fg-muted);
         }
-        .actions { display: flex; gap: 8px; }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+        }
+
         .btn {
-            background: var(--bg-elev);
-            color: var(--fg);
-            border: 1px solid var(--border);
-            padding: 8px 14px;
-            border-radius: 8px;
+            background: var(--bg-card);
+            color: var(--fg-main);
+            border: 1px solid var(--border-color);
+            padding: 10px 16px;
+            border-radius: var(--radius-md);
             cursor: pointer;
             font-size: 13px;
-            transition: all .15s ease;
-            text-decoration: none;
+            font-weight: 600;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            justify-content: center;
+            gap: 8px;
+            transition: var(--transition-smooth);
+            text-decoration: none;
+            outline: none;
         }
-        .btn:hover { background: var(--bg-elev2); border-color: var(--accent); }
-        .btn-primary { background: var(--accent); color: white; border: none; }
-        .btn-primary:hover { background: #0891b2; }
 
-        /* Stats grid */
+        .btn:hover:not(:disabled) {
+            background: var(--bg-card-hover);
+            border-color: var(--cyan);
+            box-shadow: 0 0 12px var(--cyan-glow);
+        }
+
+        .btn:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: var(--cyan);
+            color: var(--bg-main);
+            border: none;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #22d3ee;
+            box-shadow: 0 0 16px rgba(34, 211, 238, 0.35);
+        }
+
+        .btn-success {
+            background: var(--green);
+            color: var(--bg-main);
+            border: none;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: #34d399;
+            box-shadow: 0 0 16px rgba(52, 211, 153, 0.35);
+        }
+
+        /* Crawler Panel Card */
+        .crawler-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .crawler-panel h3 {
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.75px;
+            margin-bottom: 14px;
+            color: var(--cyan);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .crawler-form {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .form-control {
+            background-color: var(--bg-input);
+            color: var(--fg-main);
+            border: 1px solid var(--border-color);
+            padding: 10px 14px;
+            border-radius: var(--radius-md);
+            font-size: 13px;
+            outline: none;
+            font-family: var(--font-stack);
+            transition: var(--transition-smooth);
+        }
+
+        .form-control:focus {
+            border-color: var(--cyan);
+            box-shadow: 0 0 8px var(--cyan-glow);
+        }
+
+        .crawler-form input[type="text"] {
+            flex: 2;
+            min-width: 200px;
+        }
+
+        .crawler-form select {
+            flex: 1;
+            min-width: 150px;
+            cursor: pointer;
+        }
+
+        .crawler-form input[type="number"] {
+            width: 90px;
+        }
+
+        /* Scraper Toggles Grid */
+        .crawler-toggles {
+            display: flex;
+            gap: 20px;
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px dashed var(--border-color);
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .toggle-group {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--fg-muted);
+            user-select: none;
+        }
+
+        .toggle-container input[type="checkbox"] {
+            accent-color: var(--cyan);
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+        }
+
+        .status-indicator {
+            margin-top: 12px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 20px;
+        }
+
+        /* Stats Section */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 16px;
             margin-bottom: 28px;
         }
-        .stat-card {
-            background: var(--bg-elev);
-            border: 1px solid var(--border);
-            padding: 18px;
-            border-radius: var(--radius);
-        }
-        .stat-card .label {
-            font-size: 12px;
-            color: var(--fg-muted);
-            text-transform: uppercase;
-            letter-spacing: .5px;
-            margin-bottom: 6px;
-        }
-        .stat-card .value {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--accent);
-        }
-        .stat-card .value.green { color: var(--green); }
-        .stat-card .value.yellow { color: var(--yellow); }
 
-        /* Filters bar */
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            border-radius: var(--radius-lg);
+            position: relative;
+            overflow: hidden;
+            transition: var(--transition-smooth);
+        }
+
+        .stat-card:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+        }
+
+        .stat-card .label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--fg-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .stat-card .value {
+            font-size: 26px;
+            font-weight: 800;
+            color: var(--cyan);
+            letter-spacing: -0.5px;
+        }
+
+        .stat-card .value.green {
+            color: var(--green);
+        }
+
+        .stat-card .value.yellow {
+            color: var(--yellow);
+        }
+
+        /* Filter bar section */
         .filters {
             display: flex;
             gap: 12px;
@@ -106,350 +323,924 @@
             flex-wrap: wrap;
             align-items: center;
         }
-        .filters input, .filters select {
-            background: var(--bg-elev);
-            color: var(--fg);
-            border: 1px solid var(--border);
-            padding: 9px 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            min-width: 140px;
-        }
-        .filters input:focus, .filters select:focus {
-            outline: none;
-            border-color: var(--accent);
-        }
-        .filters input[type="text"] { flex: 1; min-width: 220px; }
 
-        /* Leads table */
-        .leads-wrap {
-            background: var(--bg-elev);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            overflow: hidden;
+        .filters .form-control {
+            min-width: 150px;
+            background-color: var(--bg-card);
         }
+
+        .filters input[type="text"] {
+            flex: 1;
+            min-width: 250px;
+        }
+
+        /* Table Design */
+        .leads-wrap {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .table-responsive {
+            overflow-x: auto;
+            width: 100%;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
             font-size: 13px;
-        }
-        th {
             text-align: left;
-            padding: 12px 14px;
-            background: var(--bg-elev2);
+        }
+
+        th.sortable {
+            cursor: pointer;
+            user-select: none;
+            transition: var(--transition-smooth);
+        }
+
+        th.sortable:hover {
+            background-color: var(--bg-card-hover);
+            color: var(--cyan);
+        }
+
+        th {
+            background-color: #121724;
             color: var(--fg-muted);
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
             font-size: 11px;
-            letter-spacing: .5px;
+            letter-spacing: 0.75px;
+            padding: 14px 16px;
+            border-bottom: 2px solid var(--border-color);
             position: sticky;
             top: 0;
+            z-index: 10;
         }
-        td { padding: 12px 14px; border-top: 1px solid var(--border); }
-        tr:hover td { background: rgba(6, 182, 212, .05); cursor: pointer; }
-        tr.selected td { background: rgba(6, 182, 212, .12); }
+
+        td {
+            padding: 14px 16px;
+            border-top: 1px solid var(--border-color);
+            vertical-align: middle;
+            color: var(--fg-main);
+        }
+
+        tr {
+            transition: var(--transition-smooth);
+        }
+
+        tr:hover td {
+            background: rgba(6, 182, 212, 0.02);
+            cursor: pointer;
+        }
+
+        tr.selected td {
+            background: rgba(6, 182, 212, 0.08);
+        }
+
+        .copyable {
+            position: relative;
+            cursor: copy !important;
+            transition: var(--transition-smooth);
+        }
+
+        .copyable:hover {
+            color: var(--cyan) !important;
+            text-decoration: underline dashed rgba(6, 182, 212, 0.4);
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.25px;
+            border: 1px solid transparent;
+        }
+
+        .badge-yes {
+            background: var(--green-glow);
+            color: var(--green);
+            border-color: rgba(16, 185, 129, 0.2);
+        }
+
+        .badge-no {
+            background: var(--red-glow);
+            color: var(--red);
+            border-color: rgba(244, 63, 94, 0.2);
+        }
+
+        .badge-tag {
+            background: var(--cyan-glow);
+            color: var(--cyan);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+            font-size: 10px;
+            padding: 2px 6px;
+            margin: 1px;
+        }
+
+        .badge-source {
+            background: var(--violet-glow);
+            color: var(--violet);
+            border-color: rgba(139, 92, 246, 0.2);
+            text-transform: uppercase;
+        }
+
+        .badge-status-discovered {
+            background: rgba(148, 163, 184, 0.12);
+            color: var(--fg-muted);
+        }
+
+        .badge-status-analyzed {
+            background: var(--cyan-glow);
+            color: var(--cyan);
+        }
+
+        .badge-status-scored {
+            background: var(--green-glow);
+            color: var(--green);
+        }
+
+        .badge-status-contacted {
+            background: var(--yellow-glow);
+            color: var(--yellow);
+        }
+
+        .badge-status-rejected {
+            background: var(--red-glow);
+            color: var(--red);
+        }
 
         .score {
             display: inline-block;
-            padding: 3px 8px;
+            padding: 4px 10px;
             border-radius: 6px;
             font-weight: 700;
             font-size: 12px;
-            min-width: 38px;
+            min-width: 44px;
             text-align: center;
         }
-        .score-high { background: rgba(16, 185, 129, .2); color: var(--green); }
-        .score-mid  { background: rgba(245, 158, 11, .2); color: var(--yellow); }
-        .score-low  { background: rgba(239, 68, 68, .2); color: var(--red); }
 
-        .badge {
-            display: inline-block;
-            padding: 2px 7px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: .3px;
+        .score-high {
+            background: var(--green-glow);
+            color: var(--green);
         }
-        .badge-yes { background: rgba(16, 185, 129, .15); color: var(--green); }
-        .badge-no  { background: rgba(239, 68, 68, .15); color: var(--red); }
-        .badge-source { background: rgba(139, 92, 246, .15); color: var(--accent2); }
-        .badge-status-discovered { background: rgba(148, 163, 184, .15); color: var(--fg-muted); }
-        .badge-status-analyzed { background: rgba(6, 182, 212, .15); color: var(--accent); }
-        .badge-status-scored { background: rgba(16, 185, 129, .15); color: var(--green); }
-        .badge-status-contacted { background: rgba(245, 158, 11, .15); color: var(--yellow); }
-        .badge-status-rejected { background: rgba(239, 68, 68, .15); color: var(--red); }
 
-        /* Lead detail panel */
+        .score-mid {
+            background: var(--yellow-glow);
+            color: var(--yellow);
+        }
+
+        .score-low {
+            background: var(--red-glow);
+            color: var(--red);
+        }
+
+        .visit-link {
+            text-decoration: none;
+            transition: var(--transition-smooth);
+        }
+
+        .visit-link:hover {
+            transform: translateY(-1px);
+        }
+
+        /* Slide-out Drawer Panel */
         .detail-panel {
             position: fixed;
-            top: 0; right: 0;
-            width: 480px;
+            top: 0;
+            right: 0;
+            width: 500px;
             height: 100vh;
-            background: var(--bg-elev);
-            border-left: 1px solid var(--border);
-            padding: 28px;
+            background: #111625;
+            border-left: 1px solid var(--border-color);
+            padding: 30px;
             overflow-y: auto;
             transform: translateX(100%);
-            transition: transform .25s ease;
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
             z-index: 100;
-            box-shadow: -10px 0 30px rgba(0,0,0,.3);
+            box-shadow: -12px 0 40px rgba(0, 0, 0, 0.5);
         }
-        .detail-panel.open { transform: translateX(0); }
+
+        .detail-panel.open {
+            transform: translateX(0);
+        }
+
         .detail-panel h2 {
-            font-size: 22px;
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--fg-main);
             margin-bottom: 4px;
-            color: var(--fg);
+            word-wrap: break-word;
         }
-        .detail-panel .meta { color: var(--fg-muted); font-size: 13px; margin-bottom: 16px; }
-        .detail-panel section { margin-top: 22px; }
-        .detail-panel h3 {
-            font-size: 12px;
-            text-transform: uppercase;
-            color: var(--accent);
-            letter-spacing: .5px;
-            margin-bottom: 8px;
-        }
-        .detail-panel ul { list-style: none; padding: 0; }
-        .detail-panel li {
-            padding: 8px 12px;
-            background: var(--bg);
-            border-radius: 8px;
-            margin-bottom: 6px;
+
+        .detail-panel .meta {
+            color: var(--fg-muted);
             font-size: 13px;
-            border-left: 3px solid var(--accent);
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 14px;
         }
-        .detail-panel .solution {
+
+        .detail-panel section {
+            margin-top: 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 16px;
+            border-radius: var(--radius-lg);
+        }
+
+        .detail-panel h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--cyan);
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+            font-weight: 700;
+        }
+
+        .detail-panel ul {
+            list-style: none;
+        }
+
+        .detail-panel li {
             padding: 10px 12px;
-            background: var(--bg);
-            border-radius: 8px;
+            background: var(--bg-main);
+            border-radius: var(--radius-md);
             margin-bottom: 8px;
+            font-size: 13px;
+            border-left: 3px solid var(--cyan);
+            color: var(--fg-main);
+        }
+
+        .detail-panel .solution {
+            padding: 12px;
+            background: var(--bg-main);
+            border-radius: var(--radius-md);
+            margin-bottom: 10px;
             border-left: 3px solid var(--green);
         }
-        .detail-panel .solution .name { font-weight: 600; color: var(--green); }
-        .detail-panel .solution .price { float: right; color: var(--yellow); font-weight: 700; }
-        .detail-panel .solution .justification { font-size: 12px; color: var(--fg-muted); margin-top: 4px; }
+
+        .detail-panel .solution .name {
+            font-weight: 700;
+            color: var(--green);
+        }
+
+        .detail-panel .solution .price {
+            float: right;
+            color: var(--yellow);
+            font-weight: 700;
+        }
+
+        .detail-panel .solution .justification {
+            font-size: 12px;
+            color: var(--fg-muted);
+            margin-top: 6px;
+            line-height: 1.4;
+        }
+
+        /* Tag UI inside Drawer */
+        .tag-manager {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .tag-list {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .tag-input-wrap {
+            display: flex;
+            gap: 8px;
+            margin-top: 6px;
+        }
+
+        .tag-input-wrap input {
+            flex: 1;
+        }
+
         .close-btn {
             position: absolute;
-            top: 18px; right: 18px;
-            background: var(--bg-elev2);
-            color: var(--fg);
+            top: 20px;
+            right: 20px;
+            background: var(--border-color);
+            color: var(--fg-main);
             border: none;
-            width: 32px; height: 32px;
+            width: 32px;
+            height: 32px;
             border-radius: 50%;
             cursor: pointer;
-            font-size: 18px;
+            font-size: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
+            transition: var(--transition-smooth);
         }
-        .close-btn:hover { background: var(--red); }
+
+        .close-btn:hover {
+            background: var(--red);
+            color: white;
+            box-shadow: 0 0 10px var(--red-glow);
+        }
+
         .empty {
             text-align: center;
             padding: 60px 20px;
             color: var(--fg-muted);
         }
-        .loading { text-align: center; padding: 40px; color: var(--fg-muted); }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--fg-muted);
+            font-weight: 500;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #1e293b;
+            color: #38bdf8;
+            border: 1px solid #0284c7;
+            padding: 12px 24px;
+            border-radius: var(--radius-md);
+            font-size: 13px;
+            font-weight: 600;
+            z-index: 1000;
+            opacity: 0;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
     </style>
 </head>
+
 <body>
 
-<header>
-    <h1>
-        DZ Sales Intelligence
-        <small>AI-powered business discovery &amp; lead scoring for Algeria 🇩🇿</small>
-    </h1>
-    <div class="actions">
-        <a class="btn" href="/api/stats" target="_blank">/api/stats</a>
-        <a class="btn" href="/api/leads?limit=100" target="_blank">/api/leads</a>
-        <button class="btn btn-primary" onclick="refresh()">↻ Refresh</button>
+    <!-- Toast Alert Container -->
+    <div id="toast" class="toast"> Text copied to clipboard!</div>
+
+    <header>
+        <h1>
+            DZ Sales Intelligence
+            <small>AI-powered business discovery &amp; lead scoring for Algeria </small>
+        </h1>
+        <div class="actions">
+            <a class="btn" href="/api/stats" target="_blank"> JSON Stats</a>
+            <a class="btn" href="/api/leads?limit=100" target="_blank"> JSON Leads</a>
+            <button class="btn btn-primary" onclick="refresh()">↻ Refresh Dashboard</button>
+        </div>
+    </header>
+
+    <!-- Crawler Panel Card -->
+    <div class="crawler-panel">
+        <h3> Live Crawler &amp; Action Control Panel</h3>
+        <div class="crawler-form">
+            <input type="text" id="crawl-query" class="form-control"
+                placeholder="Search target category (e.g. pharmacie, hotel, gym)">
+            <select id="crawl-wilaya" class="form-control">
+                <option value="">All Wilayas (Algeria Bounding Box)</option>
+            </select>
+            <input type="number" id="crawl-limit" class="form-control" value="10" min="1" max="100"
+                title="Max Results to Capture">
+            <button class="btn btn-primary" onclick="runDiscovery()" id="crawl-btn"> Start Crawler</button>
+        </div>
+
+        <!-- Scraper Selector Filters & Bulk Actions -->
+        <div class="crawler-toggles">
+            <div class="toggle-group">
+                <label class="toggle-container" title="Scan OpenStreetMap Database">
+                    <input type="checkbox" id="crawl-use-overpass" checked> OpenStreetMap (Overpass API)
+                </label>
+                <label class="toggle-container" title="Extract DuckDuckGo web indices">
+                    <input type="checkbox" id="crawl-use-ddg" checked> DuckDuckGo Search Indexer
+                </label>
+                <label class="toggle-container" title="Use mock generator if offline">
+                    <input type="checkbox" id="crawl-use-mock" checked> Mock Local Fallback
+                </label>
+            </div>
+
+            <!-- Interactive Global Database Pipeline Actions -->
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-success" id="btn-batch-analyze" onclick="runBatchAnalysis()"
+                    title="Trigger AI gap assessment on pending leads"> Run AI on Pending</button>
+                <button class="btn" id="btn-global-score" onclick="runGlobalScoring()"
+                    title="Force recalculation of priority ranks"> Recalculate Scores</button>
+            </div>
+        </div>
+        <div id="crawl-status" class="status-indicator"></div>
     </div>
-</header>
 
-<!-- Stats grid -->
-<div class="stats-grid" id="stats">
-    <div class="stat-card"><div class="label">Total Leads</div><div class="value" id="stat-total">—</div></div>
-    <div class="stat-card"><div class="label">Analyzed</div><div class="value green" id="stat-analyzed">—</div></div>
-    <div class="stat-card"><div class="label">Scored</div><div class="value" id="stat-scored">—</div></div>
-    <div class="stat-card"><div class="label">Unanalyzed</div><div class="value yellow" id="stat-unanalyzed">—</div></div>
-    <div class="stat-card"><div class="label">Avg. Score</div><div class="value" id="stat-avg">—</div></div>
-    <div class="stat-card"><div class="label">Est. Pipeline (USD)</div><div class="value green" id="stat-pipeline">—</div></div>
-</div>
+    <!-- Stats Dashboard Grid -->
+    <div class="stats-grid" id="stats">
+        <div class="stat-card">
+            <div class="label">Total Leads</div>
+            <div class="value" id="stat-total">—</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Analyzed</div>
+            <div class="value green" id="stat-analyzed">—</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Scored</div>
+            <div class="value" id="stat-scored">—</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Unanalyzed</div>
+            <div class="value yellow" id="stat-unanalyzed">—</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Avg. Score</div>
+            <div class="value" id="stat-avg">—</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Pipeline (USD)</div>
+            <div class="value green" id="stat-pipeline">—</div>
+        </div>
+    </div>
 
-<!-- Filters -->
-<div class="filters">
-    <input type="text" id="search" placeholder="Search by name, industry, wilaya, phone..." oninput="onSearchInput()">
-    <select id="filter-wilaya" onchange="reloadLeads()"><option value="">All Wilayas</option></select>
-    <select id="filter-industry" onchange="reloadLeads()"><option value="">All Industries</option></select>
-    <select id="filter-min-score" onchange="reloadLeads()">
-        <option value="0">Any score</option>
-        <option value="30">≥ 30</option>
-        <option value="50">≥ 50</option>
-        <option value="70">≥ 70</option>
-    </select>
-    <select id="filter-limit" onchange="reloadLeads()">
-        <option value="50">50 per page</option>
-        <option value="100">100 per page</option>
-        <option value="200">200 per page</option>
-    </select>
-</div>
+    <!-- Sorting & Filters Bar -->
+    <div class="filters">
+        <input type="text" id="search" class="form-control"
+            placeholder="Search saved database (by name, sector, wilaya, phone, tags...)" oninput="onSearchInput()">
+        <select id="filter-wilaya" class="form-control" onchange="reloadLeads()">
+            <option value="">All Wilayas</option>
+        </select>
+        <select id="filter-industry" class="form-control" onchange="reloadLeads()">
+            <option value="">All Industries</option>
+        </select>
+        <select id="filter-min-score" class="form-control" onchange="reloadLeads()">
+            <option value="0">Any priority score</option>
+            <option value="30">Priority ≥ 30</option>
+            <option value="50">Priority ≥ 50</option>
+            <option value="70">Priority ≥ 70</option>
+        </select>
+        <select id="filter-limit" class="form-control" onchange="reloadLeads()">
+            <option value="50">50 rows</option>
+            <option value="100">100 rows</option>
+            <option value="200">200 rows</option>
+        </select>
+    </div>
 
-<!-- Leads table -->
-<div class="leads-wrap">
-    <table>
-        <thead>
-            <tr>
-                <th>#</th>
-                <th>Score</th>
-                <th>Business</th>
-                <th>Industry</th>
-                <th>Wilaya</th>
-                <th>Web</th>
-                <th>Reviews</th>
-                <th>Est. $</th>
-                <th>Source</th>
-                <th>Status</th>
-            </tr>
-        </thead>
-        <tbody id="leads-tbody">
-            <tr><td colspan="10" class="loading">Loading…</td></tr>
-        </tbody>
-    </table>
-</div>
+    <!-- Main Leads Datatable -->
+    <div class="leads-wrap">
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th class="sortable" onclick="sortTable('priority_score')">Score <span
+                                id="sort-priority_score"></span></th>
+                        <th class="sortable" onclick="sortTable('name')">Business Name <span id="sort-name"></span>
+                        </th>
+                        <th class="sortable" onclick="sortTable('industry')">Industry <span id="sort-industry"></span>
+                        </th>
+                        <th class="sortable" onclick="sortTable('wilaya')">Wilaya <span id="sort-wilaya"></span></th>
+                        <th>Website</th>
+                        <th>Custom Tags</th>
+                        <th class="sortable" onclick="sortTable('review_count')">Reviews <span
+                                id="sort-review_count"></span></th>
+                        <th class="sortable" onclick="sortTable('estimated_value_usd')">Est. Value <span
+                                id="sort-estimated_value_usd"></span></th>
+                        <th class="sortable" onclick="sortTable('source')">Source <span id="sort-source"></span></th>
+                        <th class="sortable" onclick="sortTable('status')">Pipeline Status <span
+                                id="sort-status"></span></th>
+                    </tr>
+                </thead>
+                <tbody id="leads-tbody">
+                    <tr>
+                        <td colspan="11" class="loading">Initalizing Leads Datatable...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 
-<!-- Detail panel -->
-<div class="detail-panel" id="detail-panel">
-    <button class="close-btn" onclick="closeDetail()">×</button>
-    <div id="detail-content"></div>
-</div>
+    <!-- Lead Detail Slide-out Drawer -->
+    <div class="detail-panel" id="detail-panel">
+        <button class="close-btn" onclick="closeDetail()">×</button>
+        <div id="detail-content"></div>
+    </div>
 
-<script>
-const API = '';
-let allLeads = [];
-let searchTimer = null;
+    <script>
+        const API = '';
+        let allLeads = [];
+        let searchTimer = null;
+        let activeLead = null;
 
-function scoreClass(s) {
-    if (s >= 60) return 'score-high';
-    if (s >= 35) return 'score-mid';
-    return 'score-low';
-}
-function fmtMoney(n) {
-    if (!n && n !== 0) return '—';
-    return '$' + Number(n).toLocaleString();
-}
+        let currentSortColumn = null;
+        let currentSortDirection = 'desc';
 
-async function loadStats() {
-    const r = await fetch(API + '/api/stats');
-    const s = await r.json();
-    document.getElementById('stat-total').textContent = s.total_leads;
-    document.getElementById('stat-analyzed').textContent = s.analyzed_leads;
-    document.getElementById('stat-scored').textContent = s.scored_leads;
-    document.getElementById('stat-unanalyzed').textContent = s.unanalyzed_leads;
-    document.getElementById('stat-avg').textContent = s.average_score.toFixed(1);
-    document.getElementById('stat-pipeline').textContent = fmtMoney(s.estimated_pipeline_usd);
+        function scoreClass(s) {
+            if (s >= 60) return 'score-high';
+            if (s >= 35) return 'score-mid';
+            return 'score-low';
+        }
 
-    // Populate wilaya filter
-    const wSel = document.getElementById('filter-wilaya');
-    s.top_wilayas.forEach(w => {
-        const opt = document.createElement('option');
-        opt.value = w.wilaya; opt.textContent = `${w.wilaya} (${w.count})`;
-        wSel.appendChild(opt);
-    });
-    // Populate industry filter
-    const iSel = document.getElementById('filter-industry');
-    s.top_industries.forEach(i => {
-        const opt = document.createElement('option');
-        opt.value = i.industry; opt.textContent = `${i.industry} (${i.count})`;
-        iSel.appendChild(opt);
-    });
-}
+        function fmtMoney(n) {
+            if (!n && n !== 0) return '—';
+            return '$' + Number(n).toLocaleString();
+        }
 
-async function reloadLeads() {
-    const params = new URLSearchParams();
-    const w = document.getElementById('filter-wilaya').value;
-    const i = document.getElementById('filter-industry').value;
-    const ms = document.getElementById('filter-min-score').value;
-    const limit = document.getElementById('filter-limit').value;
-    if (w) params.set('wilaya', w);
-    if (i) params.set('industry', i);
-    params.set('min_score', ms);
-    params.set('limit', limit);
-    params.set('offset', '0');
+        function triggerToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = " " + message;
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2000);
+        }
 
-    const r = await fetch(API + '/api/leads?' + params.toString());
-    const data = await r.json();
-    allLeads = data.leads;
-    renderLeads(allLeads);
-}
+        function handleClipboardCopy(event, text) {
+            event.stopPropagation();
+            if (!text) return;
 
-function renderLeads(leads) {
-    const tbody = document.getElementById('leads-tbody');
-    if (!leads.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty">No leads match these filters.<br>Try running <code>python cli.py discover --query "restaurant"</code> first.</td></tr>';
-        return;
-    }
-    tbody.innerHTML = leads.map((l, idx) => `
+            navigator.clipboard.writeText(text).then(() => {
+                const display = text.length > 35 ? text.substring(0, 35) + "..." : text;
+                triggerToast(`Copied: "${display}"`);
+            }).catch(err => {
+                console.error("Clipboard write error:", err);
+            });
+        }
+
+        async function loadWilayas() {
+            try {
+                const r = await fetch(API + '/api/wilayas');
+                const d = await r.json();
+                const crawlSel = document.getElementById('crawl-wilaya');
+                d.wilayas.forEach(w => {
+                    const opt = document.createElement('option');
+                    opt.value = w;
+                    opt.textContent = w;
+                    crawlSel.appendChild(opt);
+                });
+            } catch (e) {
+                console.error("Failed to fetch wilayas dictionary:", e);
+            }
+        }
+
+        async function runDiscovery() {
+            const qInput = document.getElementById('crawl-query');
+            const q = qInput.value.trim();
+            if (!q) { alert("Please specify a target query keyword."); return; }
+
+            const w = document.getElementById('crawl-wilaya').value;
+            const l = document.getElementById('crawl-limit').value;
+
+            const useOverpass = document.getElementById('crawl-use-overpass').checked;
+            const useDDG = document.getElementById('crawl-use-ddg').checked;
+            const useMock = document.getElementById('crawl-use-mock').checked;
+
+            const btn = document.getElementById('crawl-btn');
+            const status = document.getElementById('crawl-status');
+
+            btn.disabled = true;
+            status.style.color = "var(--yellow)";
+            status.innerHTML = " <strong>Crawl Active:</strong> Querying Overpass and DuckDuckGo indexes... (up to 30 seconds)";
+
+            try {
+                const resp = await fetch(API + '/api/discover', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: q,
+                        wilaya: w || null,
+                        limit: parseInt(l) || 10,
+                        enable_overpass: useOverpass,
+                        enable_ddg: useDDG,
+                        enable_mock: useMock
+                    })
+                });
+                const res = await resp.json();
+                if (res.success) {
+                    status.style.color = "var(--green)";
+                    status.innerHTML = ` <strong>Crawl Complete:</strong> Inserted <strong>${res.new_leads_count}</strong> new matching lead profiles!`;
+                    qInput.value = "";
+                    refresh();
+                } else {
+                    status.style.color = "var(--red)";
+                    status.innerHTML = " <strong>Crawl Error:</strong> The scraping operation returned a failing code.";
+                }
+            } catch (e) {
+                status.style.color = "var(--red)";
+                status.innerHTML = " <strong>Network Exception:</strong> Failed to connect to discovery endpoint.";
+                console.error(e);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // Global Single UI AI Analysis Call
+        async function runSingleLeadAnalysis(id) {
+            const analyzeBtn = document.getElementById(`btn-analyze-${id}`);
+            if (analyzeBtn) {
+                analyzeBtn.disabled = true;
+                analyzeBtn.textContent = " Running LLM Analysis...";
+            }
+
+            try {
+                const r = await fetch(API + `/api/leads/${id}/analyze`, { method: 'POST' });
+                const res = await r.json();
+                if (res.success) {
+                    triggerToast("Lead Analyzed & Scored successfully!");
+                    // Re-open detail and load table
+                    await openDetail(id);
+                    await reloadLeads();
+                    await loadStats();
+                } else {
+                    alert("LLM analysis failed. Check your API key or backend logs.");
+                }
+            } catch (e) {
+                alert("Network error executing LLM analysis.");
+                console.error(e);
+            } finally {
+                if (analyzeBtn) analyzeBtn.disabled = false;
+            }
+        }
+
+        // Bulk AI Analysis Command
+        async function runBatchAnalysis() {
+            const btn = document.getElementById('btn-batch-analyze');
+            const status = document.getElementById('crawl-status');
+
+            const limit = prompt("How many pending leads do you want to analyze in this batch?", "5");
+            if (limit === null) return;
+
+            btn.disabled = true;
+            status.style.color = "var(--yellow)";
+            status.innerHTML = " <strong>AI Engine Active:</strong> Querying LLM and updating score matrices... (takes up to 10 seconds per lead)";
+
+            try {
+                const resp = await fetch(API + '/api/analyze-pending', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ limit: parseInt(limit) || 5 })
+                });
+                const res = await resp.json();
+                if (res.success) {
+                    status.style.color = "var(--green)";
+                    status.innerHTML = ` <strong>Batch Assessment Complete:</strong> Successfully analyzed and prioritized <strong>${res.analyzed_count}</strong> leads!`;
+                    refresh();
+                } else {
+                    status.style.color = "var(--red)";
+                    status.innerHTML = " <strong>Operation Failure:</strong> Could not run LLM batch analysis.";
+                }
+            } catch (e) {
+                status.style.color = "var(--red)";
+                status.innerHTML = " <strong>Connection Error:</strong> Could not post batch request.";
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // Global Database Re-scoring Command
+        async function runGlobalScoring() {
+            const btn = document.getElementById('btn-global-score');
+            const status = document.getElementById('crawl-status');
+
+            btn.disabled = true;
+            status.style.color = "var(--yellow)";
+            status.innerHTML = " <strong>Matrix Scoring Engine:</strong> Recomputing prioritizations across database...";
+
+            try {
+                const resp = await fetch(API + '/api/score-all', { method: 'POST' });
+                const res = await resp.json();
+                if (res.success) {
+                    status.style.color = "var(--green)";
+                    status.innerHTML = ` <strong>Scores Updated:</strong> Recalculated priorities across <strong>${res.scored_count}</strong> total records!`;
+                    refresh();
+                } else {
+                    status.style.color = "var(--red)";
+                    status.innerHTML = " <strong>Calculation Error:</strong> Scoring matrix evaluation failed.";
+                }
+            } catch (e) {
+                status.style.color = "var(--red)";
+                status.innerHTML = " <strong>Connection Error:</strong> Could not dispatch calculation request.";
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function loadStats() {
+            const r = await fetch(API + '/api/stats');
+            const s = await r.json();
+            document.getElementById('stat-total').textContent = s.total_leads;
+            document.getElementById('stat-analyzed').textContent = s.analyzed_leads;
+            document.getElementById('stat-scored').textContent = s.scored_leads;
+            document.getElementById('stat-unanalyzed').textContent = s.unanalyzed_leads;
+            document.getElementById('stat-avg').textContent = s.average_score.toFixed(1);
+            document.getElementById('stat-pipeline').textContent = fmtMoney(s.estimated_pipeline_usd);
+
+            const wSel = document.getElementById('filter-wilaya');
+            if (wSel.children.length === 1) {
+                s.top_wilayas.forEach(w => {
+                    const opt = document.createElement('option');
+                    opt.value = w.wilaya; opt.textContent = `${w.wilaya} (${w.count})`;
+                    wSel.appendChild(opt);
+                });
+            }
+            const iSel = document.getElementById('filter-industry');
+            if (iSel.children.length === 1) {
+                s.top_industries.forEach(i => {
+                    const opt = document.createElement('option');
+                    opt.value = i.industry; opt.textContent = `${i.industry} (${i.count})`;
+                    iSel.appendChild(opt);
+                });
+            }
+        }
+
+        async function reloadLeads() {
+            const params = new URLSearchParams();
+            const w = document.getElementById('filter-wilaya').value;
+            const i = document.getElementById('filter-industry').value;
+            const ms = document.getElementById('filter-min-score').value;
+            const limit = document.getElementById('filter-limit').value;
+            if (w) params.set('wilaya', w);
+            if (i) params.set('industry', i);
+            params.set('min_score', ms);
+            params.set('limit', limit);
+            params.set('offset', '0');
+
+            const r = await fetch(API + '/api/leads?' + params.toString());
+            const data = await r.json();
+            allLeads = data.leads;
+
+            if (currentSortColumn) {
+                applySorting();
+            } else {
+                renderLeads(allLeads);
+            }
+        }
+
+        function sortTable(columnKey) {
+            if (currentSortColumn === columnKey) {
+                currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSortColumn = columnKey;
+                currentSortDirection = 'desc';
+            }
+
+            const columns = ['priority_score', 'name', 'industry', 'wilaya', 'review_count', 'estimated_value_usd', 'source', 'status'];
+            columns.forEach(col => {
+                const arrowSpan = document.getElementById(`sort-${col}`);
+                if (col === columnKey) {
+                    arrowSpan.textContent = currentSortDirection === 'asc' ? '▲' : '▼';
+                    arrowSpan.style.color = "var(--cyan)";
+                } else {
+                    arrowSpan.textContent = '';
+                    arrowSpan.style.color = "var(--fg-dim)";
+                }
+            });
+
+            applySorting();
+        }
+
+        function applySorting() {
+            if (!currentSortColumn) return;
+
+            const sorted = [...allLeads].sort((a, b) => {
+                let valA = a[currentSortColumn];
+                let valB = b[currentSortColumn];
+
+                if (valA == null) valA = '';
+                if (valB == null) valB = '';
+
+                if (typeof valA === 'string') valA = valA.toLowerCase();
+                if (typeof valB === 'string') valB = valB.toLowerCase();
+
+                if (valA < valB) return currentSortDirection === 'asc' ? -1 : 1;
+                if (valA > valB) return currentSortDirection === 'asc' ? 1 : -1;
+                return 0;
+            });
+
+            renderLeads(sorted);
+        }
+
+        function renderLeads(leads) {
+            const tbody = document.getElementById('leads-tbody');
+            if (!leads.length) {
+                tbody.innerHTML = '<tr><td colspan="11" class="empty">No matching records found.<br>Use the <strong>Live Crawler Control Panel</strong> above to harvest matching businesses.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = leads.map((l, idx) => `
         <tr onclick="openDetail(${l.id})">
-            <td style="color:var(--fg-muted)">${idx + 1}</td>
+            <td style="color:var(--fg-dim)">${idx + 1}</td>
             <td><span class="score ${scoreClass(l.priority_score)}">${l.priority_score.toFixed(1)}</span></td>
-            <td><strong>${escapeHtml(l.name)}</strong></td>
-            <td>${escapeHtml(l.industry)}</td>
-            <td>${escapeHtml(l.wilaya)}</td>
-            <td>${l.website ? '<span class="badge badge-yes">YES</span>' : '<span class="badge badge-no">NO</span>'}</td>
-            <td>${l.review_count}</td>
-            <td style="color:var(--yellow); font-weight:600">${fmtMoney(l.estimated_value_usd)}</td>
+            <td class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(l.name)}')"><strong>${escapeHtml(l.name)}</strong></td>
+            <td class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(l.industry)}')">${escapeHtml(l.industry)}</td>
+            <td class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(l.wilaya)}')">${escapeHtml(l.wilaya)}</td>
+            <td>
+                ${l.website ? `<a href="${escapeHtml(l.website)}" target="_blank" onclick="event.stopPropagation()" class="visit-link badge badge-yes"> Visit Site</a>` : '<span class="badge badge-no">No Site</span>'}
+            </td>
+            <td>
+                <div style="display:flex; gap:3px; flex-wrap:wrap">
+                    ${(l.tags || []).map(t => `<span class="badge badge-tag">${escapeHtml(t)}</span>`).join('')}
+                </div>
+            </td>
+            <td style="color:var(--fg-muted)">${l.review_count}</td>
+            <td style="color:var(--yellow); font-weight:700">${fmtMoney(l.estimated_value_usd)}</td>
             <td><span class="badge badge-source">${l.source}</span></td>
             <td><span class="badge badge-status-${l.status}">${l.status}</span></td>
         </tr>
     `).join('');
-}
+        }
 
-async function openDetail(id) {
-    const r = await fetch(API + '/api/leads/' + id);
-    if (!r.ok) { alert('Lead not found'); return; }
-    const l = await r.json();
-    const c = document.getElementById('detail-content');
+        async function openDetail(id) {
+            const r = await fetch(API + '/api/leads/' + id);
+            if (!r.ok) { alert('Lead details unavailable.'); return; }
+            const l = await r.json();
+            activeLead = l;
+            const c = document.getElementById('detail-content');
 
-    let html = `
-        <h2>${escapeHtml(l.name)}</h2>
+            let html = `
+        <h2 class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(l.name)}')">${escapeHtml(l.name)}</h2>
         <div class="meta">${escapeHtml(l.industry)} · ${escapeHtml(l.wilaya)} · Score ${l.priority_score.toFixed(1)}/100</div>
 
+        <!-- Tag Manager Section -->
+        <section class="tag-manager">
+            <h3> Custom Lead Labels / Tags</h3>
+            <div id="lead-tags" class="tag-list">
+                ${(l.tags || []).map(t => `
+                    <span class="badge badge-tag" style="display:flex; align-items:center; gap:6px; padding: 4px 8px; font-size:11px;">
+                        ${escapeHtml(t)} 
+                        <span onclick="removeLeadTag('${escapeHtml(t)}'); event.stopPropagation();" style="cursor:pointer; font-weight:800; color:var(--red); font-size:13px; line-height:1;">×</span>
+                    </span>
+                `).join('')}
+                ${!(l.tags || []).length ? '<span style="font-size:12px; color:var(--fg-dim)">No custom tags added yet.</span>' : ''}
+            </div>
+            <div class="tag-input-wrap">
+                <input type="text" id="new-tag" class="form-control" placeholder="Add custom label (e.g., checked, refused, call-back)" onkeypress="handleTagKeypress(event)">
+                <button class="btn btn-primary" onclick="addLeadTag()">Add Tag</button>
+            </div>
+        </section>
+
+        <!-- Interactive AI Generation Section -->
+        <section style="border-left: 4px solid var(--violet); background: rgba(139, 92, 246, 0.05);">
+            <h3> Real-Time AI Diagnostics</h3>
+            ${l.analysis ? `
+                <div style="font-size:12px; color:var(--fg-muted); margin-bottom:10px;">This lead contains an AI assessment. You can re-analyze it to force refresh.</div>
+                <button class="btn btn-primary" id="btn-analyze-${l.id}" onclick="runSingleLeadAnalysis(${l.id})" style="width:100%; background:var(--violet)"> Force AI Re-Analysis</button>
+            ` : `
+                <div style="font-size:12px; color:var(--fg-muted); margin-bottom:10px;">No AI gap analysis is currently attached to this lead profile.</div>
+                <button class="btn btn-primary" id="btn-analyze-${l.id}" onclick="runSingleLeadAnalysis(${l.id})" style="width:100%; background:var(--cyan); color:var(--bg-main)"> Generate AI Lead Analysis</button>
+            `}
+        </section>
+
+        <!-- Contact/Website section -->
         <section>
-            <h3>Contact</h3>
+            <h3> Contact Metadata</h3>
             <ul>
-                ${l.phone ? `<li>📞 ${escapeHtml(l.phone)}</li>` : ''}
-                ${l.email ? `<li>✉️ ${escapeHtml(l.email)}</li>` : ''}
-                ${l.address ? `<li>📍 ${escapeHtml(l.address)}</li>` : ''}
-                ${l.website ? `<li>🌐 <a href="${escapeHtml(l.website)}" target="_blank" style="color:var(--accent)">${escapeHtml(l.website)}</a></li>` : '<li>🌐 No website</li>'}
-                ${(l.social_media || []).map(s => `<li>👥 <a href="${escapeHtml(s)}" target="_blank" style="color:var(--accent)">${escapeHtml(s)}</a></li>`).join('')}
+                ${l.phone ? `<li class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(l.phone)}')"> ${escapeHtml(l.phone)}</li>` : ''}
+                ${l.email ? `<li class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(l.email)}')"> ${escapeHtml(l.email)}</li>` : ''}
+                ${l.address ? `<li class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(l.address)}')"> ${escapeHtml(l.address)}</li>` : ''}
+                ${l.website ? `<li> <a href="${escapeHtml(l.website)}" target="_blank" style="color:var(--cyan); font-weight:600;">Visit Official Website</a> <span style="font-size:11px; color:var(--fg-dim); cursor:pointer; margin-left:8px;" onclick="handleClipboardCopy(event, '${escapeHtml(l.website)}')">(Copy Link)</span></li>` : '<li> No website discovered</li>'}
+                ${(l.social_media || []).map(s => `<li class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(s)}')"> Link: ${escapeHtml(s)}</li>`).join('')}
             </ul>
         </section>
     `;
 
-    if (l.analysis) {
-        html += `
+            if (l.analysis) {
+                html += `
             <section>
-                <h3>Digital Presence Score</h3>
-                <div style="font-size:24px; font-weight:700; color:${l.analysis.digital_presence_score >= 60 ? 'var(--green)' : l.analysis.digital_presence_score >= 30 ? 'var(--yellow)' : 'var(--red)'}">${l.analysis.digital_presence_score}/100</div>
+                <h3> Digital Presence Score</h3>
+                <div style="font-size:24px; font-weight:800; color:${l.analysis.digital_presence_score >= 60 ? 'var(--green)' : l.analysis.digital_presence_score >= 30 ? 'var(--yellow)' : 'var(--red)'}">${l.analysis.digital_presence_score}/100</div>
             </section>
 
             ${l.analysis.pain_points && l.analysis.pain_points.length ? `
                 <section>
-                    <h3>Operational Pain Points</h3>
+                    <h3> Identified Gaps &amp; Pain Points</h3>
                     <ul>
-                        ${l.analysis.pain_points.map(p => `<li>${escapeHtml(p)}</li>`).join('')}
+                        ${l.analysis.pain_points.map(p => `<li class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(p)}')">${escapeHtml(p)}</li>`).join('')}
                     </ul>
                 </section>
             ` : ''}
 
             ${l.analysis.recommended_solutions && l.analysis.recommended_solutions.length ? `
                 <section>
-                    <h3>Recommended Software Solutions</h3>
+                    <h3> High-Value Software Recommendations</h3>
                     ${l.analysis.recommended_solutions.map(s => `
-                        <div class="solution">
+                        <div class="solution copyable" onclick="handleClipboardCopy(event, '${escapeHtml(s.service_name)}')">
                             <div class="name">${escapeHtml(s.service_name)} <span class="price">${fmtMoney(s.estimated_value_usd)}</span></div>
                             <div class="justification">${escapeHtml(s.justification)}</div>
-                            ${s.priority ? `<div class="justification">Priority: ${s.priority}/10</div>` : ''}
+                            ${s.priority ? `<div class="justification">Priority Priority Weight: ${s.priority}/10</div>` : ''}
                         </div>
                     `).join('')}
                 </section>
@@ -457,91 +1248,148 @@ async function openDetail(id) {
 
             ${l.analysis.pitch_angles && l.analysis.pitch_angles.length ? `
                 <section>
-                    <h3>Sales Pitch Angles</h3>
+                    <h3> Recommended Pitch Hooks</h3>
                     <ul>
-                        ${l.analysis.pitch_angles.map(p => `<li>${escapeHtml(p)}</li>`).join('')}
+                        ${l.analysis.pitch_angles.map(p => `<li class="copyable" onclick="handleClipboardCopy(event, '${escapeHtml(p)}')">${escapeHtml(p)}</li>`).join('')}
                     </ul>
                 </section>
             ` : ''}
 
             <section>
-                <h3>Analysis Meta</h3>
-                <ul>
-                    <li>Model: ${escapeHtml(l.analysis.analysis_model || 'unknown')}</li>
-                    <li>From cache: ${l.analysis.from_cache ? '✓' : '✗'}</li>
-                    ${l.analysis.analyzed_at ? `<li>Analyzed at: ${new Date(l.analysis.analyzed_at).toLocaleString()}</li>` : ''}
+                <h3> Analysis Audit Specs</h3>
+                <ul style="border:none">
+                    <li style="border-left:3px solid var(--violet)">AI Model: ${escapeHtml(l.analysis.analysis_model || 'unknown')}</li>
+                    <li style="border-left:3px solid var(--violet)">Served from Cache: ${l.analysis.from_cache ? 'Yes' : 'No'}</li>
+                    ${l.analysis.analyzed_at ? `<li style="border-left:3px solid var(--violet)">Processed: ${new Date(l.analysis.analyzed_at).toLocaleString()}</li>` : ''}
                 </ul>
             </section>
         `;
-    } else {
-        html += `<section><h3>Not yet analyzed</h3><p style="color:var(--fg-muted)">Run <code>python cli.py analyze</code> to generate AI analysis for this lead.</p></section>`;
-    }
+            }
 
-    // Status controls
-    html += `
+            // Status controls
+            html += `
         <section>
-            <h3>Update Status</h3>
+            <h3> Update Lead Pipeline Status</h3>
             <div style="display:flex; gap:6px; flex-wrap:wrap">
                 ${['discovered', 'analyzed', 'scored', 'contacted', 'rejected'].map(st => `
-                    <button class="btn" onclick="updateStatus(${l.id}, '${st}')" ${st === l.status ? 'disabled style="opacity:.5"' : ''}>${st}</button>
+                    <button class="btn" onclick="updateStatus(${l.id}, '${st}')" ${st === l.status ? 'disabled style="opacity:.3"' : ''}>${st}</button>
                 `).join('')}
             </div>
         </section>
     `;
 
-    c.innerHTML = html;
-    document.getElementById('detail-panel').classList.add('open');
-}
+            c.innerHTML = html;
+            document.getElementById('detail-panel').classList.add('open');
+        }
 
-function closeDetail() {
-    document.getElementById('detail-panel').classList.remove('open');
-}
+        function handleTagKeypress(e) {
+            if (e.key === 'Enter') {
+                addLeadTag();
+            }
+        }
 
-async function updateStatus(id, status) {
-    const r = await fetch(API + '/api/leads/' + id + '/status', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({status}),
-    });
-    if (r.ok) {
-        closeDetail();
-        await reloadLeads();
-        await loadStats();
-    } else {
-        alert('Failed to update status');
-    }
-}
+        async function addLeadTag() {
+            if (!activeLead) return;
+            const input = document.getElementById('new-tag');
+            const tag = input.value.trim();
+            if (!tag) return;
 
-function onSearchInput() {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(doSearch, 250);
-}
+            const currentTags = activeLead.tags || [];
+            if (currentTags.includes(tag)) {
+                input.value = "";
+                return;
+            }
 
-async function doSearch() {
-    const q = document.getElementById('search').value.trim();
-    if (!q) {
-        await reloadLeads();
-        return;
-    }
-    const r = await fetch(API + '/api/search?q=' + encodeURIComponent(q) + '&limit=50');
-    const data = await r.json();
-    allLeads = data.leads;
-    renderLeads(allLeads);
-}
+            const updatedTags = [...currentTags, tag];
+            const r = await fetch(API + `/api/leads/${activeLead.id}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tags: updatedTags })
+            });
+            if (r.ok) {
+                input.value = "";
+                await openDetail(activeLead.id);
+                await reloadLeads();
+            } else {
+                alert("Action unsuccessful: Failed to save custom label.");
+            }
+        }
 
-function escapeHtml(s) {
-    if (s == null) return '';
-    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
+        async function removeLeadTag(tagToRemove) {
+            if (!activeLead) return;
+            const currentTags = activeLead.tags || [];
+            const updatedTags = currentTags.filter(t => t !== tagToRemove);
 
-function refresh() {
-    loadStats();
-    reloadLeads();
-}
+            const r = await fetch(API + `/api/leads/${activeLead.id}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tags: updatedTags })
+            });
+            if (r.ok) {
+                await openDetail(activeLead.id);
+                await reloadLeads();
+            } else {
+                alert("Action unsuccessful: Failed to drop tag.");
+            }
+        }
 
-// Initial load
-refresh();
-</script>
+        function closeDetail() {
+            document.getElementById('detail-panel').classList.remove('open');
+            activeLead = null;
+        }
+
+        async function updateStatus(id, status) {
+            const r = await fetch(API + '/api/leads/' + id + '/status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status }),
+            });
+            if (r.ok) {
+                closeDetail();
+                await reloadLeads();
+                await loadStats();
+            } else {
+                alert('Failed to update workflow state.');
+            }
+        }
+
+        function onSearchInput() {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(doSearch, 250);
+        }
+
+        async function doSearch() {
+            const q = document.getElementById('search').value.trim();
+            if (!q) {
+                await reloadLeads();
+                return;
+            }
+            const r = await fetch(API + '/api/search?q=' + encodeURIComponent(q) + '&limit=50');
+            const data = await r.json();
+            allLeads = data.leads;
+
+            if (currentSortColumn) {
+                applySorting();
+            } else {
+                renderLeads(allLeads);
+            }
+        }
+
+        function escapeHtml(s) {
+            if (s == null) return '';
+            return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        function refresh() {
+            loadStats();
+            reloadLeads();
+        }
+
+        // Initial script execution
+        loadWilayas();
+        refresh();
+    </script>
 
 </body>
+
 </html>

@@ -77,7 +77,7 @@ def _print_lead_table(leads: list[Lead], title: str = "Leads") -> None:
     table.add_column("Status", style="dim")
 
     for i, lead in enumerate(leads, start=1):
-        website_flag = "✓" if lead.business.website else "✗"
+        website_flag = "" if lead.business.website else ""
         table.add_row(
             str(i),
             f"{lead.priority_score:.1f}",
@@ -312,7 +312,7 @@ def export(fmt: str, out: str, limit: int) -> None:
             lines.append(
                 f"| {i} | {l.priority_score:.1f} | {l.business.name} | "
                 f"{l.business.industry} | {l.business.wilaya} | "
-                f"{'✓' if l.business.website else '✗'} | ${l.total_estimated_value_usd:,.0f} |"
+                f"{'' if l.business.website else ''} | ${l.total_estimated_value_usd:,.0f} |"
             )
         out_path.write_text("\n".join(lines), encoding="utf-8")
 

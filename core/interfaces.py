@@ -143,3 +143,7 @@ class ILeadRepository(ABC):
     @abstractmethod
     def stats(self) -> Dict[str, Any]:
         """Aggregate statistics for the dashboard."""
+    
+    @abstractmethod
+    def set_tags(self, business_id: int, tags: List[str]) -> None:
+        """Update custom user tags for a business."""

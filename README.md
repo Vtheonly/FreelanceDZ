@@ -4,7 +4,7 @@ An AI-powered **business discovery, gap analysis, and lead scoring platform** bu
 
 ---
 
-## 📖 Architecture & Data Flow
+##  Architecture & Data Flow
 
 ```mermaid
 graph TD
@@ -30,7 +30,7 @@ graph TD
 
 ---
 
-## ⚙️ Setup & Credential Safety
+##  Setup & Credential Safety
 
 To prevent security leaks, credentials must **never** be committed to the repository. 
 
@@ -62,7 +62,7 @@ To prevent security leaks, credentials must **never** be committed to the reposi
 
 ---
 
-## 🚀 The Prospecting Pipeline: How it Works
+##  The Prospecting Pipeline: How it Works
 
 The pipeline executes in three distinct phases:
 
@@ -86,7 +86,7 @@ The `LeadScoringEngine` computes a priority score from `0.0` to `100.0` based on
 
 ---
 
-## 🛠️ CLI Reference Manual
+##  CLI Reference Manual
 
 Run the CLI using `.venv/bin/python cli.py <command>`.
 
@@ -165,7 +165,7 @@ python cli.py config
 
 ---
 
-## 🖥️ Web Dashboard
+##  Web Dashboard
 
 Start the FastAPI web server to browse leads interactively:
 ```bash
@@ -182,16 +182,16 @@ python cli.py serve --port 8080
 
 ---
 
-## 🔍 What Works vs. Known Limitations
+##  What Works vs. Known Limitations
 
-### ✅ What Works
+###  What Works
 * **Robust offline fallbacks**: If you exceed your LLM tier or lose connection, mock scrapers and heuristic analysis keep the pipeline fully operational.
 * **Deterministic caching**: Re-running the pipeline on identical leads uses zero LLM credits.
 * **Strict Deduplication**: Prevents database clutter even if you run scrapers multiple times.
 * **Jinja2 UI Compatibility**: Switched to modern keyword arguments for `TemplateResponse` to avoid Jinja2 hashing crashes.
 * **Overpass QL Regex Fix**: Case-insensitive queries to OSM servers are stable (`["name"~"query",i]`).
 
-### ⚠️ Limitations & Edge Cases
+###  Limitations & Edge Cases
 * **DuckDuckGo Rate Limits**: DuckDuckGo search queries will throttle or block your IP temporarily if you request leads in rapid succession. Use the `RATE_LIMIT_DELAY_SECONDS` variable to keep query frequency low.
 * **OpenStreetMap Data Coverage**: OpenStreetMap depends on crowdsourced edits. Some rural Algerian wilayas might return few or no nodes. Use `discover` with DDG or fallback scrapers for these areas.
 * **LLM Output Parsers**: Occasionally, cheap LLM models fail to return valid JSON structures. The parser is built to intercept these anomalies and use heuristic fallbacks for the fields that failed.
