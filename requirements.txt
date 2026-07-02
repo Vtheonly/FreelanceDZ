@@ -1,29 +1,40 @@
 # ============================================================
-# DZ Sales Intelligence - Python Dependencies
+# FreelanceDZ Refactored — Production Dependencies
+# All versions are pinned to known-good, mutually compatible releases.
 # ============================================================
 
-# --- Pydantic for data validation & settings ---
-pydantic>=2.6.0
-pydantic-settings>=2.2.0
+# --- Web framework (async) ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2==3.1.5
+python-multipart==0.0.20
 
-# --- HTTP client for scrapers & LLM APIs ---
-requests>=2.31.0
-urllib3>=2.0.0
+# --- HTTP client (async, HTTP/2) ---
+httpx[http2]==0.28.1
+
+# --- HTML / DOM parsing ---
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# --- Phone number validation (Google libphonenumber) ---
+phonenumbers==8.13.52
+
+# --- Pydantic v2 + settings ---
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# --- LLM providers ---
+openai==1.59.6
+tiktoken==0.8.0
 
 # --- CLI ---
-click>=8.1.7
+click==8.1.8
+rich==13.9.4
 
-# --- Storage ---
-# sqlite3 is part of the standard library - no external dep needed.
+# --- Utilities ---
+python-dateutil==2.9.0.post0
+tenacity==9.0.0
+rapidfuzz==3.11.0
 
-# --- Logging / utilities ---
-python-dotenv>=1.0.0
-tenacity>=8.2.3       # Robust retry/backoff primitives
-
-# --- Optional: lightweight web dashboard ---
-fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
-jinja2>=3.1.3
-
-# --- Optional: richer console output (CLI tables) ---
-rich>=13.7.0
+# --- Optional: headless browser for social scrapers ---
+# playwright==1.49.1

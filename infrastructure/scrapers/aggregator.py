@@ -1,115 +1,145 @@
-"""Scraper aggregator — runs multiple enabled scrapers and deduplicates results.
+"""Exhaustive scraper aggregator.
 
-Implements the same `IScraper` interface as individual scrapers, so it can be
-used transparently wherever a single scraper is expected.
+The aggregator is the heart of the discovery system. It guarantees
+that a request for N leads produces N leads whenever the underlying
+sources actually have that many results — it never stops early just
+because one source ran out.
+
+Strategy
+--------
+1. Expand the query into FR / MSA / Darja variants (offline matrix +
+   optional LLM).
+2. For each variant, dispatch every enabled scraper concurrently.
+3. Collect results into a single pool, deduplicating by fingerprint.
+4. If the pool is below the requested limit, cycle back and try the
+   next query variant.
+5. Stop when the limit is reached OR every variant × every scraper has
+   been exhausted.
+6. Return the trimmed pool (never more than ``limit``).
+
+The aggregator is *fault-tolerant*: a scraper that raises or returns
+an empty list is logged and skipped — it never aborts the whole run.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import List, Optional
+from typing import Optional
 
-from core.interfaces import IScraper
-from config.settings import settings
-from domain.models import BusinessRaw, DataSource
-from infrastructure.scrapers.base import BaseScraper
-from infrastructure.scrapers.duckduckgo import DuckDuckGoScraper
-from infrastructure.scrapers.mock import MockScraper
-from infrastructure.scrapers.overpass import OverpassScraper
+import httpx
+
+from core.interfaces import IDiscoveryAggregator, ILLMClient, IScraper
+from domain.models import BusinessRaw
+from utils.query_expander import AlgerianQueryExpander
 
 
-class ScraperAggregator(BaseScraper):
-    """Runs all enabled scrapers in sequence and de-duplicates by fingerprint."""
+_logger = logging.getLogger("scrapers.aggregator")
 
-    source_name = "aggregator"
 
-    def __init__(self, scrapers: Optional[List[IScraper]] = None) -> None:
-        super().__init__()
-        if scrapers is None:
-            scrapers = self._default_scrapers()
-        self._scrapers = scrapers
-        self._logger.info(
-            "ScraperAggregator initialised with: %s",
+class ScraperAggregator(IDiscoveryAggregator):
+    """Coordinate multiple scrapers to exhaustively reach a target limit."""
+
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        scrapers: Optional[list[IScraper]] = None,
+        llm: Optional[ILLMClient] = None,
+        query_expander: Optional[AlgerianQueryExpander] = None,
+    ) -> None:
+        self._client = client
+        self._scrapers = scrapers or []
+        self._expander = query_expander or AlgerianQueryExpander(llm=llm)
+        _logger.debug(
+            "Aggregator initialised with %d scrapers: %s",
+            len(self._scrapers),
             [s.source_name for s in self._scrapers],
         )
 
-    @staticmethod
-    def _default_scrapers() -> List[IScraper]:
-        """Build the default scraper list based on settings flags."""
-        scrapers: List[IScraper] = []
-        if settings.ENABLE_OVERPASS_SCRAPER:
-            scrapers.append(OverpassScraper())
-        if settings.ENABLE_DDG_SCRAPER:
-            scrapers.append(DuckDuckGoScraper())
-        if settings.ENABLE_MOCK_SCRAPER:
-            scrapers.append(MockScraper())
-        if not scrapers:
-            # Always keep mock as a safety net.
-            scrapers.append(MockScraper())
-        return scrapers
+    def add_scraper(self, scraper: IScraper) -> None:
+        """Register an additional scraper at runtime."""
+        self._scrapers.append(scraper)
+        _logger.debug("Added scraper %s (total=%d)", scraper.source_name, len(self._scrapers))
 
-    def discover_businesses(
+    async def discover_exhaustive(
         self,
         query: str,
         wilaya: Optional[str] = None,
-        limit: int = 10,
-    ) -> List[BusinessRaw]:
-        self._logger.info("Aggregator starting discovery: query=%r wilaya=%r limit=%d", query, wilaya, limit)
+        limit: int = 30,
+    ) -> list[BusinessRaw]:
+        """Run every scraper across every query variant until ``limit`` is met."""
+        if not query or not self._scrapers:
+            return []
 
-        # Per-source quota — we slightly over-fetch to allow for dedup losses.
-        per_source_limit = max(limit, 5)
-        all_results: List[BusinessRaw] = []
-
-        for scraper in self._scrapers:
-            try:
-                self._logger.debug("Running scraper: %s", scraper.source_name)
-                results = scraper.discover_businesses(query, wilaya, per_source_limit)
-                all_results.extend(results)
-            except Exception as e:
-                # A single scraper failure must NOT bring down the whole aggregator.
-                self._logger.error("Scraper %s raised: %s", scraper.source_name, e)
-
-        deduped = self._deduplicate(all_results)
-        # Bias towards non-mock sources when trimming to `limit`.
-        sorted_results = sorted(
-            deduped,
-            key=lambda b: 0 if b.source != DataSource.MOCK else 1,
+        # 1. Expand the query into localised variants.
+        variants = await self._expander.expand(query)
+        if not variants:
+            variants = [query]
+        _logger.info(
+            "Aggregator starting: query=%r variants=%d scrapers=%d limit=%d",
+            query, len(variants), len(self._scrapers), limit,
         )
-        final = sorted_results[:limit]
-        self._logger.info(
-            "Aggregator finished: %d raw → %d deduped → %d returned",
-            len(all_results), len(deduped), len(final),
+
+        pool: list[BusinessRaw] = []
+        seen: set[str] = set()
+
+        # 2. Iterate over variants; stop early once we have enough.
+        for variant in variants:
+            if len(pool) >= limit:
+                break
+
+            # 3. Dispatch every scraper concurrently for this variant.
+            tasks = [
+                self._safe_discover(scraper, variant, wilaya, limit)
+                for scraper in self._scrapers
+            ]
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in batch_results:
+                if isinstance(result, Exception):
+                    _logger.warning("Scraper raised: %s", result)
+                    continue
+                if not result:
+                    continue
+                for biz in result:
+                    fp = biz.fingerprint()
+                    if fp in seen:
+                        continue
+                    seen.add(fp)
+                    pool.append(biz)
+                    if len(pool) >= limit:
+                        break
+                if len(pool) >= limit:
+                    break
+
+        _logger.info(
+            "Aggregator finished: %d unique businesses (target was %d)",
+            len(pool), limit,
         )
-        return final
+        return pool[:limit]
 
-    @staticmethod
-    def _deduplicate(businesses: List[BusinessRaw]) -> List[BusinessRaw]:
-        """Keep the first occurrence of each fingerprint, preferring richer records."""
-        seen: dict[str, BusinessRaw] = {}
-        for b in businesses:
-            fp = b.fingerprint()
-            if fp not in seen:
-                seen[fp] = b
-                continue
-            # Replace if the new record is "richer" (more filled fields).
-            existing_score = ScraperAggregator._richness(seen[fp])
-            new_score = ScraperAggregator._richness(b)
-            if new_score > existing_score:
-                seen[fp] = b
-        return list(seen.values())
+    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _richness(b: BusinessRaw) -> int:
-        """Score how complete a record is — used to pick the best of duplicates."""
-        score = 0
-        if b.website: score += 3
-        if b.phone: score += 2
-        if b.email: score += 2
-        score += min(len(b.social_media_handles), 3)
-        score += min(b.review_count // 50, 3)
-        if b.address: score += 1
-        if b.latitude is not None and b.longitude is not None: score += 1
-        # Prefer real sources over mock.
-        if b.source != DataSource.MOCK:
-            score += 5
-        return score
+    async def _safe_discover(
+        self,
+        scraper: IScraper,
+        query: str,
+        wilaya: Optional[str],
+        limit: int,
+    ) -> list[BusinessRaw]:
+        """Call ``scraper.discover`` and never raise.
+
+        Over-fetch by 2x to compensate for spam records that the
+        aggregator will deduplicate out.
+        """
+        try:
+            # Ask for 2x the limit so post-dedup we still have enough.
+            over_fetch = max(limit * 2, limit + 5)
+            return await scraper.discover(query=query, wilaya=wilaya, limit=over_fetch)
+        except Exception as exc:
+            _logger.warning(
+                "Scraper %s raised during discover (%s); continuing.",
+                getattr(scraper, "source_name", "?"),
+                exc,
+            )
+            return []

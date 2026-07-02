@@ -1,166 +1,249 @@
-"""DuckDuckGo HTML scraper — no API key required.
+"""Async, paginated DuckDuckGo scraper.
 
-Uses DuckDuckGo's HTML endpoint (https://html.duckduckgo.com/html/) which is
-intended for non-JS clients. We parse organic results and attempt to extract
-business name + URL + a snippet. Phone/email/social handles are extracted from
-the snippet with simple regexes.
+Key improvements over the original implementation:
 
-This is a low-fidelity source: we mostly use it as a *discovery hint* that
-augments OSM. Many results may not be businesses at all; we filter aggressively.
+1. **Async** — uses the shared ``httpx.AsyncClient`` instead of blocking
+   ``requests.get``. Multiple pages can be fetched concurrently when
+   configured.
+2. **Paginated** — iterates through up to ``MAX_SEARCH_PAGES`` pages of
+   DDG results per query expansion, so a request for 30 results does
+   not stop after the first page of 10.
+3. **Query expansion** — the caller (the aggregator) expands the query
+   into FR / MSA / Darja variants before invoking the scraper; this
+   scraper just runs each variant until the limit is reached.
+4. **Spam filtering** — directory aggregators (Cybo, YellowPages, etc.)
+   are dropped *before* building ``BusinessRaw`` objects.
+5. **Deep content extraction** — when a result URL looks like a real
+   business page (not a directory), the scraper optionally fetches the
+   page and runs ``AdvancedContentExtractor`` to pull structured data
+   from JSON-LD schemas.
+6. **Smart phone validation** — uses ``libphonenumber`` instead of
+   fragile regexes.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import re
-from typing import List, Optional
-from urllib.parse import parse_qs, unquote, urlparse
+from typing import Optional
 
-from config.settings import settings
-from domain.models import BusinessRaw, DataSource
-from infrastructure.scrapers.base import BaseScraper
+from bs4 import BeautifulSoup
 
+from config.settings import get_settings
+from domain.enums import DataSource, FreshnessAge
+from domain.models import BusinessRaw
+from domain.value_objects import FreshnessMetadata
+from infrastructure.http.rate_limiter import AsyncRateLimiter, DomainRateLimiter
+from infrastructure.scrapers.base import BaseAsyncScraper
+from infrastructure.scrapers.content_extractor import AdvancedContentExtractor
+from utils.contact_parser import extract_first_email
+from utils.freshness_detector import FreshnessDetector
+from utils.phone_validator import SmartPhoneValidator
+from utils.spam_filter import SourcingSpamFilter
+from utils.url_utils import clean_url, unwrap_ddg_url
+
+
+_logger = logging.getLogger("scrapers.duckduckgo")
 
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 
-# Regexes for contact extraction from snippet text.
-_PHONE_RE = re.compile(r"\+?2?13?\s?\d[\d\s\-.]{6,}\d")
-_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-_SOCIAL_RE = re.compile(
-    r"(https?://(?:www\.)?(?:facebook|instagram|linkedin|twitter|tiktok|youtube)\.com/[^\s\"<>]+)",
-    re.IGNORECASE,
-)
 
+class AsyncDuckDuckGoScraper(BaseAsyncScraper):
+    """Paginated, async DuckDuckGo HTML scraper."""
 
-class DuckDuckGoScraper(BaseScraper):
-    """Discovers businesses via DuckDuckGo HTML search."""
+    def __init__(
+        self,
+        client,
+        spam_filter: Optional[SourcingSpamFilter] = None,
+        phone_validator: Optional[SmartPhoneValidator] = None,
+        freshness_detector: Optional[FreshnessDetector] = None,
+        content_extractor: Optional[AdvancedContentExtractor] = None,
+        rate_limiter: Optional[AsyncRateLimiter] = None,
+        domain_limiter: Optional[DomainRateLimiter] = None,
+        deep_crawl: bool = True,
+    ) -> None:
+        super().__init__(
+            client=client,
+            spam_filter=spam_filter,
+            rate_limiter=rate_limiter,
+            domain_limiter=domain_limiter,
+        )
+        self._phone_validator = phone_validator or SmartPhoneValidator()
+        self._freshness = freshness_detector or FreshnessDetector()
+        self._content_extractor = content_extractor or AdvancedContentExtractor()
+        self._deep_crawl = deep_crawl
 
-    source_name = "duckduckgo"
+    @property
+    def source_name(self) -> str:
+        return "duckduckgo"
 
-    def discover_businesses(
+    async def discover(
         self,
         query: str,
         wilaya: Optional[str] = None,
         limit: int = 10,
-    ) -> List[BusinessRaw]:
-        self._logger.info("DDG discovery: query=%r wilaya=%r limit=%d", query, wilaya, limit)
-
-        full_query = f"{query} {wilaya} Algeria" if wilaya else f"{query} Algeria"
-        # DDG HTML page returns up to ~30 results per request.
-        resp = self._safe_get(DDG_HTML_URL, params={"q": full_query, "kl": "dz-ar"})
-        if resp is None:
+    ) -> list[BusinessRaw]:
+        """Paginated discovery with deep content extraction."""
+        if not query:
             return []
+        self._logger.info("DDG discover: query=%r wilaya=%r limit=%d", query, wilaya, limit)
 
+        settings = get_settings()
+        max_pages = settings.MAX_SEARCH_PAGES
+        discovered: list[BusinessRaw] = []
+        seen_fingerprints: set[str] = set()
+
+        for page in range(max_pages):
+            if len(discovered) >= limit:
+                break
+
+            offset = page * 30  # DDG returns ~30 results per page.
+            full_query = self._build_query(query, wilaya)
+            params = {"q": full_query, "s": str(offset), "kl": "dz-ar"}
+
+            response = await self._fetch(DDG_HTML_URL, params=params, timeout=12.0)
+            if response is None:
+                self._logger.debug("DDG page %d returned no response — stopping.", page)
+                break
+
+            results = self._parse_results(response.text)
+            if not results:
+                self._logger.debug("DDG page %d had no parseable results — stopping.", page)
+                break
+
+            self._logger.debug("DDG page %d: %d raw results", page, len(results))
+
+            # Process results concurrently within the page for speed.
+            batch = await asyncio.gather(
+                *(
+                    self._result_to_business(r, query, wilaya)
+                    for r in results
+                ),
+                return_exceptions=True,
+            )
+            for item in batch:
+                if not isinstance(item, BusinessRaw):
+                    continue
+                fp = item.fingerprint()
+                if fp in seen_fingerprints:
+                    continue
+                seen_fingerprints.add(fp)
+                discovered.append(item)
+                if len(discovered) >= limit:
+                    break
+
+        self._logger.info("DDG discovered %d businesses for %r", len(discovered), query)
+        return discovered
+
+    # ------------------------------------------------------------------
+    #  Parsing
+    # ------------------------------------------------------------------
+
+    def _build_query(self, query: str, wilaya: Optional[str]) -> str:
+        if wilaya:
+            return f"{query} {wilaya} Algérie"
+        return f"{query} Algérie"
+
+    def _parse_results(self, html: str) -> list[dict[str, str]]:
+        """Extract organic result blocks from a DDG HTML page."""
         try:
-            from html.parser import HTMLParser
-        except ImportError:
-            return []
+            soup = BeautifulSoup(html, "lxml")
+        except Exception:
+            soup = BeautifulSoup(html, "html.parser")
 
-        results = self._parse_ddg_html(resp.text)
-        self._logger.info("DDG returned %d parsed results", len(results))
-
-        businesses: List[BusinessRaw] = []
-        for r in results[:limit]:
-            biz = self._result_to_business(r, query, wilaya)
-            if biz is not None:
-                businesses.append(biz)
-
-        self._logger.info("Converted %d DDG results into BusinessRaw.", len(businesses))
-        return businesses
-
-    # ------------------------------------------------------------------
-    # HTML parsing — keep it dependency-free (no BeautifulSoup).
-    # ------------------------------------------------------------------
-
-    def _parse_ddg_html(self, html: str) -> List[dict]:
-        """Extract organic result blocks from DDG HTML page."""
-        results: List[dict] = []
-        # Result containers look like:
-        # <a class="result__a" href="...">Title</a>
-        # <a class="result__snippet" ...>Snippet text</a>
-        title_re = re.compile(r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.+?)</a>', re.S)
-        snippet_re = re.compile(r'<a[^>]+class="result__snippet"[^>]*>(.+?)</a>', re.S)
-
-        titles = title_re.findall(html)
-        snippets = snippet_re.findall(html)
-
-        # Pair them by index (DDG outputs them in order).
-        for i, (raw_url, raw_title) in enumerate(titles):
-            snippet = snippets[i][0] if i < len(snippets) else ""
-            clean_title = self._strip_tags(raw_title)
-            clean_snippet = self._strip_tags(snippet)
-            real_url = self._unwrap_ddg_url(raw_url)
-            results.append({
-                "title": clean_title,
-                "snippet": clean_snippet,
-                "url": real_url,
-            })
+        results: list[dict[str, str]] = []
+        for anchor in soup.find_all("a", class_="result__a"):
+            title = anchor.get_text(strip=True)
+            raw_href = anchor.get("href", "")
+            url = unwrap_ddg_url(raw_href)
+            if not title or not url:
+                continue
+            # Snippet is the next sibling with class result__snippet.
+            snippet = ""
+            parent = anchor.find_parent(class_="result")
+            if parent is not None:
+                snippet_tag = parent.find("a", class_="result__snippet")
+                if snippet_tag:
+                    snippet = snippet_tag.get_text(strip=True)
+            results.append({"title": title, "url": url, "snippet": snippet})
         return results
 
-    @staticmethod
-    def _strip_tags(s: str) -> str:
-        s = re.sub(r"<[^>]+>", "", s)
-        s = re.sub(r"&amp;", "&", s)
-        s = re.sub(r"&quot;", '"', s)
-        s = re.sub(r"&#x27;", "'", s)
-        s = re.sub(r"&nbsp;", " ", s)
-        return s.strip()
-
-    @staticmethod
-    def _unwrap_ddg_url(raw_url: str) -> str:
-        """DDG wraps external URLs in a redirect like //duckduckgo.com/l/?uddg=<URL>."""
-        if raw_url.startswith("//"):
-            raw_url = "https:" + raw_url
-        parsed = urlparse(raw_url)
-        if "duckduckgo.com" in parsed.netloc:
-            qs = parse_qs(parsed.query)
-            if "uddg" in qs:
-                return unquote(qs["uddg"][0])
-        return raw_url
-
-    # ------------------------------------------------------------------
-
-    def _result_to_business(
+    async def _result_to_business(
         self,
-        result: dict,
+        result: dict[str, str],
         query: str,
         wilaya: Optional[str],
     ) -> Optional[BusinessRaw]:
         title = result.get("title", "").strip()
+        url = clean_url(result.get("url", ""))
         snippet = result.get("snippet", "").strip()
-        url = result.get("url", "").strip()
 
-        if not title or len(title) < 3:
+        if not title or len(title) < 3 or not url:
             return None
 
-        # Aggressive filter: title must contain the query OR snippet must mention Algeria.
-        q_lower = (query or "").lower()
-        title_lower = title.lower()
-        snippet_lower = snippet.lower()
-        if q_lower and q_lower not in title_lower and q_lower not in snippet_lower:
-            if "algeri" not in snippet_lower and "alger" not in snippet_lower:
-                return None
-
-        # Try to detect phone / email / social in the snippet.
-        phone_match = _PHONE_RE.search(snippet)
-        email_match = _EMAIL_RE.search(snippet)
-        social_matches = _SOCIAL_RE.findall(snippet)
-
-        # Industry best-guess from query.
-        industry = query.title() if query else "Other"
-
-        try:
-            return BusinessRaw(
-                name=title[:120],
-                industry=industry,
-                wilaya=wilaya or "Unknown",
-                website=url if url.startswith("http") else None,
-                phone=phone_match.group(0).strip() if phone_match else None,
-                email=email_match.group(0) if email_match else None,
-                social_media_handles=[s for s in social_matches][:3],
-                source=DataSource.DDG,
-                source_url=url,
-            )
-        except Exception as e:
-            self._logger.debug("Skipped DDG result (%s): %s", title[:40], e)
+        # Drop directory aggregators before doing any expensive work.
+        if self._spam_filter.is_spam(url, title):
             return None
+
+        # Phase 1: build a preliminary record from SERP metadata.
+        phone_meta = self._phone_validator.extract_and_validate(f"{title} {snippet}")
+        phone_primary = phone_meta[0].e164 if phone_meta else None
+        email = extract_first_email(snippet)
+        freshness_meta = self._freshness.detect(snippet)
+
+        biz = BusinessRaw(
+            name=title[:200],
+            industry=query.title() if query else "Other",
+            wilaya=wilaya or "Unknown",
+            website=url,
+            phone=phone_primary,
+            email=email,
+            source=DataSource.DUCKDUCKGO,
+            source_url=url,
+            phone_metadata=phone_meta,
+            freshness=freshness_meta,
+        )
+
+        # Phase 2: optionally deep-crawl the target page for richer data.
+        if self._deep_crawl and url:
+            await self._enrich_with_deep_crawl(biz)
+
+        return biz
+
+    async def _enrich_with_deep_crawl(self, biz: BusinessRaw) -> None:
+        """Fetch the business website and merge structured schema data.
+
+        Mutates ``biz`` in place. Failures are non-fatal — we keep the
+        SERP-level data and just log the miss.
+        """
+        if not biz.website:
+            return
+        response = await self._fetch(biz.website, timeout=8.0)
+        if response is None:
+            return
+        profile = self._content_extractor.extract_deep_profile(response.text, biz.website)
+
+        if profile.get("name") and len(profile["name"]) > 2:
+            biz.name = profile["name"][:200]
+        if profile.get("address"):
+            biz.address = profile["address"]
+        if profile.get("email") and not biz.email:
+            biz.email = profile["email"]
+        if profile.get("socials"):
+            merged = list(set((biz.social_media_handles or []) + profile["socials"]))[:10]
+            biz.social_media_handles = merged
+
+        # Re-validate any newly discovered phone numbers.
+        raw_phones = " ".join(profile.get("phones", []))
+        if raw_phones:
+            extra_meta = self._phone_validator.extract_and_validate(raw_phones)
+            if extra_meta:
+                combined = self._phone_validator.deduplicate(
+                    list(biz.phone_metadata) + extra_meta
+                )
+                biz.phone_metadata = combined
+                biz.phone = combined[0].e164
+
+        # Refresh freshness from the actual page text/headers.
+        headers_dict = dict(response.headers) if hasattr(response, "headers") else None
+        biz.freshness = self._freshness.detect(response.text, headers=headers_dict)

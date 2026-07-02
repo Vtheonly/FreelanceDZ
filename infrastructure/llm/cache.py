@@ -1,7 +1,12 @@
-"""Disk cache for LLM responses — saves free-tier quota.
+"""Disk-based LLM response cache.
 
-Keyed by a SHA-256 of (provider, model, business fingerprint, prompt version).
-Stored as JSON files under `<CACHE_DIR>/llm/`.
+Avoids re-calling the LLM for identical prompts during development and
+integration testing. The cache is content-addressed (SHA-256 of the
+prompt) so identical prompts always hit the same file.
+
+The cache is *best-effort*: any I/O error is swallowed and treated as
+a cache miss. This means a corrupted cache file never breaks the
+pipeline — it just causes one extra LLM call.
 """
 
 from __future__ import annotations
@@ -9,74 +14,87 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from config.settings import settings
+from config.settings import AppSettings, get_settings
+
+
+_logger = logging.getLogger("infrastructure.llm.cache")
 
 
 class LLMCache:
-    """Filesystem-backed JSON cache for LLM analysis responses."""
+    """File-based, content-addressed cache for LLM responses."""
 
-    def __init__(self, cache_dir: Optional[Path] = None) -> None:
-        self._dir = Path(cache_dir) if cache_dir else settings.llm_cache_path
-        self._dir.mkdir(parents=True, exist_ok=True)
-        self._logger = logging.getLogger("llm.cache")
-        self._enabled = settings.ENABLE_LLM_CACHE
+    def __init__(self, cache_dir: Optional[Path] = None, enabled: bool = True) -> None:
+        self._enabled = enabled
+        if not enabled:
+            self._cache_dir = None
+            return
+        settings = get_settings()
+        self._cache_dir = cache_dir or settings.llm_cache_path
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _make_key(provider: str, model: str, business_fingerprint: str, prompt_version: str) -> str:
-        raw = f"{provider}|{model}|{business_fingerprint}|{prompt_version}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    @property
+    def enabled(self) -> bool:
+        return self._enabled and self._cache_dir is not None
 
-    def _path(self, key: str) -> Path:
-        # Use 2-level sharding to avoid huge flat directories.
-        return self._dir / key[:2] / f"{key}.json"
-
-    def get(self, provider: str, model: str, business_fingerprint: str, prompt_version: str) -> Optional[dict]:
-        if not self._enabled:
+    def get(self, prompt: str, model: str) -> Optional[dict[str, Any]]:
+        """Return the cached response for ``prompt``+``model``, or None."""
+        if not self.enabled:
             return None
-        key = self._make_key(provider, model, business_fingerprint, prompt_version)
-        path = self._path(key)
+        path = self._path_for(prompt, model)
         if not path.exists():
             return None
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            self._logger.debug("Cache HIT: %s", key[:12])
-            return data
-        except Exception as e:
-            self._logger.warning("Failed reading cache file %s: %s", path, e)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            _logger.debug("LLM cache hit: %s", path.name)
+            return payload
+        except (json.JSONDecodeError, OSError) as exc:
+            _logger.warning("Corrupt cache file %s, ignoring: %s", path, exc)
             return None
 
-    def set(
-        self,
-        provider: str,
-        model: str,
-        business_fingerprint: str,
-        prompt_version: str,
-        payload: dict,
-    ) -> None:
-        if not self._enabled:
+    def set(self, prompt: str, model: str, response: dict[str, Any]) -> None:
+        """Persist a response. Failures are logged but never raised."""
+        if not self.enabled:
             return
-        key = self._make_key(provider, model, business_fingerprint, prompt_version)
-        path = self._path(key)
+        path = self._path_for(prompt, model)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "model": model,
+                "cached_at": datetime.now(timezone.utc).isoformat(),
+                "response": response,
+            }
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            self._logger.debug("Cache SET: %s", key[:12])
-        except Exception as e:
-            self._logger.warning("Failed writing cache file %s: %s", path, e)
+        except OSError as exc:
+            _logger.warning("Failed to write LLM cache %s: %s", path, exc)
 
     def clear(self) -> int:
-        """Delete every cached entry. Returns the number of files removed."""
-        count = 0
-        if not self._dir.exists():
+        """Delete every cache file. Returns the number of files removed."""
+        if not self.enabled or self._cache_dir is None:
             return 0
-        for f in self._dir.rglob("*.json"):
+        removed = 0
+        for f in self._cache_dir.rglob("*.json"):
             try:
                 f.unlink()
-                count += 1
+                removed += 1
             except OSError:
                 pass
-        self._logger.info("Cleared %d cache files.", count)
-        return count
+        _logger.info("Cleared %d LLM cache files", removed)
+        return removed
+
+    # ------------------------------------------------------------------
+
+    def _path_for(self, prompt: str, model: str) -> Path:
+        """Return the cache file path for a given prompt+model.
+
+        Files are sharded into a 2-level directory tree (first 2 hex chars
+        / next 2 hex chars) to avoid having thousands of files in a
+        single directory.
+        """
+        key = f"{model}::{prompt}"
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        shard = self._cache_dir / digest[:2] / digest[2:4]
+        shard.mkdir(parents=True, exist_ok=True)
+        return shard / f"{digest}.json"

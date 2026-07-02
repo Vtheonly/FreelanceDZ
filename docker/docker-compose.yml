@@ -1,0 +1,52 @@
+# ============================================================
+#  FreelanceDZ Refactored — Docker Compose
+#  Single-service deployment. Add SearXNG / Postgres as needed.
+# ============================================================
+version: "3.9"
+
+services:
+  engine:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: freelancedz-engine
+    user: "1000:1000"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Decoupled volumes: separate mounts for db, logs, exports, and cache
+      # so a corrupt db never blocks log writes, and exports survive a db wipe.
+      - engine-db:/app/data/db
+      - engine-logs:/app/data/logs
+      - engine-exports:/app/data/exports
+      - engine-cache:/app/data/cache
+      # Mount .env from the host (must exist — see .env.example).
+      - ../.env:/app/.env:ro
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - DATABASE_PATH=/app/data/db/deephuntr.db
+      - EXPORT_DIR=/app/data/exports
+      - CACHE_DIR=/app/data/cache
+      - LOG_DIR=/app/data/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Resource limits prevent runaway memory during large crawl campaigns.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.5"
+
+volumes:
+  engine-db:
+  engine-logs:
+  engine-exports:
+  engine-cache:

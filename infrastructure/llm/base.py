@@ -1,360 +1,252 @@
-"""Base LLM client — shared HTTP + retry + cache + fallback logic.
+"""Base LLM client — shared logic for every provider adapter.
 
-Concrete providers (Groq, OpenRouter) inherit from this and only need to
-implement `_provider_specific_payload_modifier()` (which is usually a no-op,
-since both providers speak the OpenAI-compatible Chat Completions API).
+Concrete providers (Groq, OpenRouter) inherit from this class and only
+need to implement ``_call_provider``. The base class handles:
+
+* Multi-model fallback chain (try each model in order until one works).
+* Disk-based caching (via ``LLMCache``).
+* Exponential backoff on rate-limit errors (HTTP 429).
+* Heuristic fallback when every model and retry is exhausted.
+
+This eliminates the original codebase's brittle single-model dependency.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import time
-from typing import Any, Dict, Optional
+from abc import abstractmethod
+from typing import Any, Optional
 
-import requests
+import httpx
 
-from config.industries import resolve_industry
-from config.services_catalog import default_price_for
-from config.settings import settings
+from config.settings import AppSettings, get_settings
+from core.exceptions import LLMError, RateLimitError
 from core.interfaces import ILLMClient
-from domain.exceptions import (
-    LLMAuthError,
-    LLMError,
-    LLMRateLimitError,
-    LLMResponseParseError,
-)
 from domain.models import BusinessRaw, LeadAnalysis, ProposedService
 from infrastructure.llm.cache import LLMCache
-from infrastructure.llm.prompts import SYSTEM_PROMPT, build_health_check_prompt, build_user_prompt
+from infrastructure.llm.fallback_heuristic import HeuristicAnalyzer
+from infrastructure.llm.prompts import (
+    PROMPT_ANALYZE_BUSINESS,
+    PROMPT_EXPAND_QUERY,
+    SYSTEM_PROMPT_ANALYZER,
+    SYSTEM_PROMPT_QUERY_EXPANDER,
+)
+from utils.retry import retry_with_backoff
 
 
-# Bumped whenever we change the prompt meaningfully — invalidates all cached entries.
-PROMPT_VERSION = "v1.0.0"
+_logger = logging.getLogger("infrastructure.llm.base")
 
 
 class BaseLLMClient(ILLMClient):
-    """Common LLM client logic for OpenAI-compatible APIs."""
+    """Abstract base implementing the shared LLM orchestration logic.
 
-    provider_name: str = "base"
+    Subclasses implement ``_call_provider`` (the actual HTTP call to the
+    provider) and ``provider_name``. Everything else — caching, retries,
+    fallback chain, JSON parsing — is handled here.
+    """
 
-    def __init__(self) -> None:
-        self._api_key = settings.LLM_API_KEY
-        self._api_base = settings.LLM_API_BASE.rstrip("/")
-        self._model = settings.LLM_MODEL
-        self._timeout = settings.LLM_TIMEOUT_SECONDS
-        self._max_retries = settings.LLM_MAX_RETRIES
-        self._base_delay = settings.RATE_LIMIT_DELAY_SECONDS
-        self._cache = LLMCache()
-        self._session = requests.Session()
-        self._session.headers.update({
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        })
-        self._logger = logging.getLogger(f"llm.{self.provider_name}")
-
-    # ------------------------------------------------------------------
-    # To be overridden by subclasses if needed.
-    # ------------------------------------------------------------------
-
-    def _provider_specific_payload_modifier(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Hook for provider-specific quirks (extra headers, body fields, ...)."""
-        return payload
-
-    def _provider_extra_headers(self) -> Dict[str, str]:
-        """Hook for extra HTTP headers (e.g. OpenRouter's HTTP-Referer)."""
-        return {}
+    def __init__(
+        self,
+        settings: Optional[AppSettings] = None,
+        cache: Optional[LLMCache] = None,
+        heuristic: Optional[HeuristicAnalyzer] = None,
+    ) -> None:
+        self._settings = settings or get_settings()
+        self._cache = cache or LLMCache(enabled=self._settings.ENABLE_LLM_CACHE)
+        self._heuristic = heuristic or HeuristicAnalyzer()
+        self._models = self._settings.llm_models_list or ["llama-3.1-8b-instant"]
+        self._api_key = self._settings.LLM_API_KEY
+        self._api_base = self._settings.LLM_API_BASE
 
     # ------------------------------------------------------------------
-    # ILLMClient implementation
+    #  Public API (from ILLMClient)
     # ------------------------------------------------------------------
 
-    def health_check(self) -> bool:
-        """Send a tiny prompt to verify the API key and connectivity."""
+    async def analyze_business_needs(self, business: BusinessRaw) -> LeadAnalysis:
+        """Analyse a business and return a structured ``LeadAnalysis``.
+
+        Strategy:
+        1. Build the prompt.
+        2. Try cache.
+        3. Try each model in the fallback chain (with retries).
+        4. On total failure, return the heuristic analysis.
+        """
         if not self._api_key:
-            return False
-        payload = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": "Reply with JSON only."},
-                {"role": "user", "content": build_health_check_prompt()},
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.0,
-            "max_tokens": 20,
-        }
-        try:
-            resp = self._session.post(
-                f"{self._api_base}/chat/completions",
-                json=self._provider_specific_payload_modifier(payload),
-                headers=self._provider_extra_headers() or None,
-                timeout=self._timeout,
-            )
-            if resp.status_code in (401, 403):
-                self._logger.error("Auth failed (%d) for %s.", resp.status_code, self.provider_name)
-                return False
-            return resp.status_code == 200
-        except requests.RequestException as e:
-            self._logger.warning("Health check request failed: %s", e)
-            return False
+            _logger.debug("No LLM_API_KEY — using heuristic for %r", business.name)
+            return self._heuristic.analyze(business)
 
-    def analyze_business_needs(self, business: BusinessRaw) -> LeadAnalysis:
-        """Analyse a business, with cache + retry + fallback."""
-        if not self._api_key:
-            self._logger.warning(
-                "No API key configured — using fallback analyzer for %s.", business.name
-            )
-            return self._generate_fallback_analysis(business)
-
-        # 1. Check cache.
-        cached = self._cache.get(
-            self.provider_name, self._model, business.fingerprint(), PROMPT_VERSION
+        prompt = PROMPT_ANALYZE_BUSINESS.format(
+            business_json=business.model_dump_json(indent=2)
         )
-        if cached is not None:
-            self._logger.info("Cache hit for %s — skipping LLM call.", business.name)
-            analysis = self._parse_response(cached, business)
-            analysis.from_cache = True
-            analysis.analysis_model = self._model
-            return analysis
 
-        # 2. Build request payload.
-        user_prompt = build_user_prompt(business)
-        payload: Dict[str, Any] = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.2,
-            "max_tokens": 1200,
-        }
-        payload = self._provider_specific_payload_modifier(payload)
+        # 1. Cache lookup.
+        for model in self._models:
+            cached = self._cache.get(prompt, model)
+            if cached is not None:
+                _logger.debug("Cache hit for %r on model %s", business.name, model)
+                return self._parse_analysis(cached["response"], model, from_cache=True)
 
-        # 3. Call with exponential backoff.
-        raw_response = self._call_with_retry(payload, business.name)
-        if raw_response is None:
-            self._logger.warning(
-                "All LLM retries exhausted — using fallback for %s.", business.name
-            )
-            return self._generate_fallback_analysis(business)
-
-        # 4. Parse + cache.
-        try:
-            analysis = self._parse_response(raw_response, business)
-        except LLMResponseParseError as e:
-            self._logger.error("Failed to parse LLM output for %s: %s", business.name, e)
-            return self._generate_fallback_analysis(business)
-
-        self._cache.set(
-            self.provider_name,
-            self._model,
-            business.fingerprint(),
-            PROMPT_VERSION,
-            raw_response,
-        )
-        analysis.analysis_model = self._model
-        return analysis
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    def _call_with_retry(self, payload: Dict[str, Any], business_name: str) -> Optional[dict]:
-        """POST /chat/completions with exponential backoff. Returns parsed JSON or None."""
-        delay = self._base_delay
-        last_status: Optional[int] = None
-
-        for attempt in range(1, self._max_retries + 1):
+        # 2. Live call with model fallback.
+        last_error: Optional[Exception] = None
+        for model in self._models:
             try:
-                self._logger.debug(
-                    "[%s] Attempt %d/%d — calling %s",
-                    business_name, attempt, self._max_retries, self.provider_name,
+                raw = await self._call_with_retry(
+                    prompt=prompt,
+                    system_prompt=SYSTEM_PROMPT_ANALYZER,
+                    model=model,
                 )
-                resp = self._session.post(
-                    f"{self._api_base}/chat/completions",
-                    json=payload,
-                    headers=self._provider_extra_headers() or None,
-                    timeout=self._timeout,
-                )
-                last_status = resp.status_code
-
-                if resp.status_code == 200:
-                    return self._extract_content_json(resp)
-
-                if resp.status_code == 429:
-                    self._logger.warning(
-                        "[%s] HTTP 429 (rate limited) on attempt %d. Backing off %.1fs.",
-                        business_name, attempt, delay,
-                    )
-                    time.sleep(delay)
-                    delay *= 2
+                parsed = self._safe_json(raw)
+                if parsed is None:
+                    _logger.warning("Model %s returned non-JSON; trying next.", model)
                     continue
-
-                if resp.status_code in (401, 403):
-                    raise LLMAuthError(
-                        f"{self.provider_name} rejected API key (HTTP {resp.status_code})."
-                    )
-
-                if resp.status_code >= 500:
-                    self._logger.warning(
-                        "[%s] HTTP %d on attempt %d. Backing off %.1fs.",
-                        business_name, resp.status_code, attempt, delay,
-                    )
-                    time.sleep(delay)
-                    delay *= 2
-                    continue
-
-                # Other 4xx — log body, do not retry.
-                self._logger.error(
-                    "[%s] Unrecoverable HTTP %d: %s",
-                    business_name, resp.status_code, resp.text[:300],
-                )
-                return None
-
-            except LLMAuthError:
-                raise
-            except requests.exceptions.Timeout:
-                self._logger.warning(
-                    "[%s] Timeout on attempt %d. Backing off %.1fs.",
-                    business_name, attempt, delay,
-                )
-                time.sleep(delay)
-                delay *= 2
-            except requests.RequestException as e:
-                self._logger.warning(
-                    "[%s] Request error on attempt %d: %s", business_name, attempt, e
-                )
-                time.sleep(delay)
-                delay *= 2
-
-        if last_status == 429:
-            self._logger.error("[%s] Hit rate limit after all retries.", business_name)
-        return None
-
-    @staticmethod
-    def _extract_content_json(resp: requests.Response) -> dict:
-        """Pull `choices[0].message.content` and parse it as JSON."""
-        body = resp.json()
-        content = body["choices"][0]["message"]["content"]
-        # Some models wrap JSON in markdown fences — strip them defensively.
-        content = content.strip()
-        if content.startswith("```"):
-            content = content.strip("`")
-            # Drop leading language tag like "json\n"
-            if content.lower().startswith("json"):
-                content = content[4:].lstrip()
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            raise LLMResponseParseError(f"LLM output is not valid JSON: {e}") from e
-
-    def _parse_response(self, data: dict, business: BusinessRaw) -> LeadAnalysis:
-        """Convert raw LLM JSON dict into a strict `LeadAnalysis`."""
-        if not isinstance(data, dict):
-            raise LLMResponseParseError("LLM output is not a JSON object.")
-
-        pain_points = data.get("pain_points", [])
-        if not isinstance(pain_points, list):
-            pain_points = []
-
-        solutions: list[ProposedService] = []
-        for sol in data.get("recommended_solutions", []) or []:
-            if not isinstance(sol, dict):
+                self._cache.set(prompt, model, parsed)
+                return self._parse_analysis(parsed, model, from_cache=False)
+            except RateLimitError as exc:
+                last_error = exc
+                _logger.warning("Rate-limited on model %s; trying next.", model)
                 continue
-            name = str(sol.get("service_name", "Custom Software")).strip()
-            # Snap to known catalogue price if possible.
-            value = float(sol.get("estimated_value_usd") or default_price_for(name))
-            priority = int(sol.get("priority", 5))
-            priority = max(1, min(10, priority))
-            solutions.append(ProposedService(
-                service_name=name,
-                justification=str(sol.get("justification", ""))[:500],
-                estimated_value_usd=value,
-                priority=priority,
-            ))
+            except (httpx.HTTPError, LLMError) as exc:
+                last_error = exc
+                _logger.warning("Model %s failed (%s); trying next.", model, exc)
+                continue
 
-        digital_score = int(data.get("digital_presence_score", 50))
-        digital_score = max(0, min(100, digital_score))
+        _logger.error(
+            "Every LLM model failed for %r; falling back to heuristic. Last error: %s",
+            business.name,
+            last_error,
+        )
+        return self._heuristic.analyze(business)
 
-        pitch_angles = data.get("pitch_angles", [])
-        if not isinstance(pitch_angles, list):
-            pitch_angles = []
-
-        est_revenue = data.get("estimated_monthly_revenue_usd")
-        if est_revenue is not None:
+    async def expand_query(self, query: str) -> list[str]:
+        """Generate FR / MSA / Darja query variants via the LLM."""
+        if not self._api_key:
+            return []
+        prompt = PROMPT_EXPAND_QUERY.format(query=query)
+        for model in self._models:
             try:
-                est_revenue = float(est_revenue)
-            except (TypeError, ValueError):
-                est_revenue = None
+                raw = await self._call_with_retry(
+                    prompt=prompt,
+                    system_prompt=SYSTEM_PROMPT_QUERY_EXPANDER,
+                    model=model,
+                )
+                parsed = self._safe_json(raw)
+                if isinstance(parsed, list):
+                    return [str(t).strip() for t in parsed if str(t).strip()]
+                _logger.warning("Query expander returned non-list from %s", model)
+            except (RateLimitError, httpx.HTTPError, LLMError) as exc:
+                _logger.warning("Query expansion failed on %s: %s", model, exc)
+                continue
+        return []
 
-        if not solutions:
-            # If LLM returned no usable solutions, fallback for this field.
-            solutions = self._fallback_solutions(business)
-
-        return LeadAnalysis(
-            pain_points=[str(p) for p in pain_points][:10],
-            recommended_solutions=solutions[:5],
-            digital_presence_score=digital_score,
-            pitch_angles=[str(p) for p in pitch_angles][:5],
-            estimated_monthly_revenue_usd=est_revenue,
-            analyzed_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
-        )
+    async def health_check(self) -> bool:
+        """Lightweight check — returns True if any model responds."""
+        if not self._api_key:
+            return False
+        for model in self._models:
+            try:
+                await self._call_with_retry(
+                    prompt="ping",
+                    system_prompt="Reply with the single word: pong",
+                    model=model,
+                )
+                return True
+            except Exception:
+                continue
+        return False
 
     # ------------------------------------------------------------------
-    # Deterministic fallback (no LLM required)
+    #  Abstract — provider-specific HTTP call
     # ------------------------------------------------------------------
 
-    def _generate_fallback_analysis(self, business: BusinessRaw) -> LeadAnalysis:
-        """Produce a usable analysis without calling the LLM."""
-        self._logger.info("Generating fallback analysis for %s.", business.name)
-        template = resolve_industry(business.industry)
+    @abstractmethod
+    async def _call_provider(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str,
+        model: str,
+        timeout: float,
+    ) -> str:
+        """Make a single HTTP call to the provider and return raw text."""
 
-        pain_points = [
-            f"Limited digital presence for a {template.label} in {business.wilaya}.",
-            "Heavy reliance on manual / phone-based customer interactions.",
-            "No integrated software to track sales, inventory, or customers.",
-        ]
-        if business.website:
-            pain_points[0] = (
-                f"Website exists but may be outdated or not mobile-friendly for a {template.label}."
+    # ------------------------------------------------------------------
+    #  Internals
+    # ------------------------------------------------------------------
+
+    @retry_with_backoff(
+        max_retries=3,
+        base_delay=2.0,
+        exceptions=(httpx.HTTPStatusError, httpx.NetworkError, httpx.TimeoutException),
+    )
+    async def _call_with_retry(self, *, prompt: str, system_prompt: str, model: str) -> str:
+        """Wrap the provider call with retry + rate-limit detection."""
+        try:
+            return await self._call_provider(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=model,
+                timeout=float(self._settings.LLM_TIMEOUT_SECONDS),
             )
-
-        solutions = self._fallback_solutions(business)
-
-        digital_score = template.expected_digital_gap
-        if business.website:
-            digital_score = min(100, digital_score + 25)
-        if business.social_media_handles:
-            digital_score = min(100, digital_score + 15)
-
-        pitch_angles = [
-            f"Help {business.name} modernise its operations with custom software tailored to Algerian {template.label}s.",
-            f"Compete with larger chains in {business.wilaya} by improving online visibility and customer experience.",
-        ]
-
-        return LeadAnalysis(
-            pain_points=pain_points,
-            recommended_solutions=solutions,
-            digital_presence_score=digital_score,
-            pitch_angles=pitch_angles,
-            estimated_monthly_revenue_usd=None,
-            analysis_model=f"{self.provider_name}-fallback",
-        )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                retry_after = exc.response.headers.get("Retry-After")
+                raise RateLimitError(
+                    f"HTTP 429 from {model}",
+                    retry_after=float(retry_after) if retry_after else None,
+                    cause=exc,
+                ) from exc
+            raise
 
     @staticmethod
-    def _fallback_solutions(business: BusinessRaw) -> list[ProposedService]:
-        """Generate 2-3 ProposedService objects based on the industry template."""
-        template = resolve_industry(business.industry)
-        services = []
-        for svc_name in template.typical_services[:3]:
-            services.append(ProposedService(
-                service_name=svc_name,
-                justification=(
-                    f"Standard need for a {template.label} "
-                    f"{'with no online presence' if not business.website else 'looking to upgrade its digital tools'}."
-                ),
-                estimated_value_usd=default_price_for(svc_name) or template.average_project_value_usd,
-                priority=7,
-            ))
-        return services
+    def _safe_json(raw: str) -> Any:
+        """Parse JSON from an LLM response that may include code fences."""
+        if not raw:
+            return None
+        # Strip markdown code fences if present.
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            # Remove the opening fence (with optional language) and the closing fence.
+            first_newline = cleaned.find("\n")
+            if first_newline != -1:
+                cleaned = cleaned[first_newline + 1:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Try to find the first JSON object/array in the text.
+            for start_char, end_char in [("{", "}"), ("[", "]")]:
+                start = cleaned.find(start_char)
+                end = cleaned.rfind(end_char)
+                if start != -1 and end != -1 and end > start:
+                    try:
+                        return json.loads(cleaned[start : end + 1])
+                    except json.JSONDecodeError:
+                        continue
+            return None
+
+    def _parse_analysis(
+        self,
+        payload: dict[str, Any],
+        model: str,
+        *,
+        from_cache: bool,
+    ) -> LeadAnalysis:
+        """Convert the parsed JSON dict into a validated ``LeadAnalysis``."""
+        solutions = []
+        for s in payload.get("recommended_solutions", []):
+            try:
+                solutions.append(ProposedService(**s))
+            except Exception as exc:
+                _logger.debug("Skipped malformed solution %r: %s", s, exc)
+        return LeadAnalysis(
+            pain_points=list(payload.get("pain_points", [])),
+            recommended_solutions=solutions,
+            digital_presence_score=int(payload.get("digital_presence_score", 50)),
+            pitch_angles=list(payload.get("pitch_angles", [])),
+            estimated_monthly_revenue_usd=payload.get("estimated_monthly_revenue_usd"),
+            analysis_model=model,
+            from_cache=from_cache,
+        )

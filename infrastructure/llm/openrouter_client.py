@@ -1,28 +1,74 @@
-"""OpenRouter LLM client — uses OpenRouter's OpenAI-compatible API (free models).
+"""OpenRouter LLM client adapter.
 
-OpenRouter requires two extra HTTP headers:
-  * `HTTP-Referer`: a site URL representing the calling app (optional but recommended).
-  * `X-Title`: app name (optional but recommended).
+OpenRouter aggregates many providers (Anthropic, Mistral, Meta, etc.)
+behind a single OpenAI-compatible endpoint. Useful as a fallback when
+the primary Groq key hits free-tier limits.
 """
 
 from __future__ import annotations
 
+import logging
+from typing import Any
+
+import httpx
+
+from config.settings import AppSettings, get_settings
 from infrastructure.llm.base import BaseLLMClient
 
 
+_logger = logging.getLogger("infrastructure.llm.openrouter")
+
+
+OPENROUTER_DEFAULT_BASE = "https://openrouter.ai/api/v1"
+
+
 class OpenRouterLLMClient(BaseLLMClient):
-    """Free-tier OpenRouter chat completions client."""
+    """LLM client that talks to the OpenRouter aggregator endpoint."""
 
-    provider_name = "openrouter"
+    def __init__(
+        self,
+        settings: AppSettings | None = None,
+        api_base: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(settings=settings, **kwargs)
+        self._api_key = self._settings.LLM_API_KEY
+        self._api_base = (api_base or OPENROUTER_DEFAULT_BASE).rstrip("/")
+        _logger.debug("OpenRouter client ready (base=%s)", self._api_base)
 
-    def _provider_extra_headers(self):
-        return {
-            "HTTP-Referer": "https://github.com/local/dz-sales-intelligence",
-            "X-Title": "DZ Sales Intelligence",
+    @property
+    def provider_name(self) -> str:
+        return "openrouter"
+
+    async def _call_provider(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str,
+        model: str,
+        timeout: float,
+    ) -> str:
+        if not self._api_key:
+            raise httpx.HTTPError("OpenRouter API key is not configured")
+        url = f"{self._api_base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            # OpenRouter recommends these for app attribution / ranking.
+            "HTTP-Referer": "https://github.com/Vtheonly/FreelanceDZ",
+            "X-Title": "FreelanceDZ Engine",
         }
-
-    def _provider_specific_payload_modifier(self, payload):
-        # OpenRouter supports `response_format: {"type": "json_object"}` for many models,
-        # but some free models ignore it. We keep it; if it fails the base class's
-        # markdown-fence-stripping logic will still recover the JSON.
-        return payload
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2048,
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, json=body, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]

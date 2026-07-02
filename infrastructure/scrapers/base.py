@@ -1,131 +1,132 @@
-"""Base scraper — shared utilities for every concrete scraper.
+"""Abstract base class for every async scraper.
 
-Concrete scrapers inherit from `BaseScraper` to get:
-  * Configured `requests.Session` with timeout + user agent.
-  * Safe HTTP GET that never raises (logs + returns None).
-  * Common OSM tag → BusinessRaw mapping helper.
+Provides shared infrastructure:
+  * HTTP client injection (the managed singleton from ``HttpClientFactory``).
+  * Spam-filter wiring so subclasses don't re-implement it.
+  * Jitter injection between requests (politeness).
+  * Concurrency cap via ``AsyncRateLimiter``.
+  * Structured logging with the scraper's source name.
+
+Subclasses only implement ``discover()`` — everything else is handled
+here.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from abc import ABC, abstractmethod
+from typing import Optional
 
-import requests
+import httpx
 
-from config.settings import settings
 from core.interfaces import IScraper
-from domain.models import BusinessRaw, DataSource
+from domain.models import BusinessRaw
+from infrastructure.http.rate_limiter import AsyncRateLimiter, DomainRateLimiter
+from utils.anti_block_engine import CrawlerAntiBlockEngine
+from utils.spam_filter import SourcingSpamFilter
 
 
-class BaseScraper(IScraper):
-    """Common scaffolding for all scrapers."""
+class BaseAsyncScraper(IScraper, ABC):
+    """Common scaffolding for async scrapers.
 
-    source_name: str = "base"
+    Parameters
+    ----------
+    client:
+        The shared ``httpx.AsyncClient``. Injected so tests can pass a
+        mock client.
+    spam_filter:
+        Optional custom spam filter. Defaults to the standard
+        ``SourcingSpamFilter``.
+    rate_limiter:
+        Optional global concurrency cap. Defaults to ``AsyncRateLimiter``.
+    domain_limiter:
+        Optional per-domain politeness limiter. Defaults to
+        ``DomainRateLimiter`` configured from settings.
+    """
 
-    def __init__(self) -> None:
-        self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent": settings.SCRAPER_USER_AGENT,
-            "Accept-Language": "en,fr;q=0.9,ar;q=0.8",
-        })
-        self._timeout = settings.SCRAPER_TIMEOUT_SECONDS
-        self._logger = logging.getLogger(f"scraper.{self.source_name}")
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        spam_filter: Optional[SourcingSpamFilter] = None,
+        rate_limiter: Optional[AsyncRateLimiter] = None,
+        domain_limiter: Optional[DomainRateLimiter] = None,
+    ) -> None:
+        self.client = client
+        self._spam_filter = spam_filter or SourcingSpamFilter()
+        self._rate_limiter = rate_limiter or AsyncRateLimiter()
+        self._domain_limiter = domain_limiter or DomainRateLimiter()
+        self._anti_block = CrawlerAntiBlockEngine()
+        self._logger = logging.getLogger(f"scrapers.{self.source_name}")
 
-    # -------- HTTP helpers --------
+    # ------------------------------------------------------------------
+    #  IScraper contract
+    # ------------------------------------------------------------------
 
-    def _safe_get(self, url: str, params: Optional[Dict[str, Any]] = None) -> Optional[requests.Response]:
-        """GET that swallows exceptions and logs them. Returns None on failure."""
-        try:
-            self._logger.debug("GET %s params=%s", url, params)
-            resp = self._session.get(url, params=params, timeout=self._timeout)
-            if resp.status_code != 200:
-                self._logger.warning(
-                    "%s returned HTTP %d (len=%d)", url, resp.status_code, len(resp.content)
-                )
-                return None
-            return resp
-        except requests.exceptions.Timeout:
-            self._logger.warning("Timeout fetching %s", url)
-        except requests.exceptions.RequestException as e:
-            self._logger.warning("Request failed for %s: %s", url, e)
-        return None
+    @property
+    @abstractmethod
+    def source_name(self) -> str:
+        """Short, stable identifier (e.g. 'duckduckgo', 'overpass')."""
 
-    # -------- Common mapping helpers --------
+    @abstractmethod
+    async def discover(
+        self,
+        query: str,
+        wilaya: Optional[str] = None,
+        limit: int = 10,
+    ) -> list[BusinessRaw]:
+        ...
 
-    @staticmethod
-    def _extract_social(tags: Dict[str, str]) -> List[str]:
-        """Pull social-media URLs from an OSM-style tag dict."""
-        out: List[str] = []
-        for key in ("contact:facebook", "contact:instagram", "contact:linkedin",
-                    "contact:twitter", "contact:youtube", "contact:tiktok"):
-            val = tags.get(key)
-            if val:
-                if not val.startswith("http"):
-                    val = f"https://{val}"
-                out.append(val)
-        if "website" in tags:
-            pass  # website is handled separately
-        return out
+    # ------------------------------------------------------------------
+    #  Shared helpers (used by subclasses)
+    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _safe_float(val: Any) -> Optional[float]:
-        try:
-            return float(val) if val not in (None, "") else None
-        except (TypeError, ValueError):
+    async def _fetch(
+        self,
+        url: str,
+        *,
+        params: Optional[dict[str, str]] = None,
+        headers: Optional[dict[str, str]] = None,
+        timeout: Optional[float] = None,
+        mobile: bool = False,
+    ) -> Optional[httpx.Response]:
+        """Fetch a URL with rate-limiting, jitter, and spam filtering.
+
+        Returns ``None`` on any failure (network error, spam-detected
+        target, non-200 status). Subclasses should treat ``None`` as
+        "skip this URL" and continue with the next candidate.
+        """
+        if self._spam_filter.is_spam(url, ""):
+            self._logger.debug("Spam-filtered URL skipped: %s", url)
             return None
 
-    @staticmethod
-    def _tags_to_industry(tags: Dict[str, str]) -> str:
-        """Best-effort mapping of OSM amenity/shop tags to our industry labels."""
-        amenity = tags.get("amenity", "")
-        shop = tags.get("shop", "")
-        tourism = tags.get("tourism", "")
-        office = tags.get("office", "")
-        healthcare = tags.get("healthcare", "")
-        craft = tags.get("craft", "")
+        host = _host_of(url)
+        final_headers = headers or self._anti_block.generate_headers(host=host, mobile=mobile)
 
-        mapping = {
-            # amenity
-            "restaurant": "Restaurant", "fast_food": "Fast Food",
-            "cafe": "Cafe / Coffee Shop", "bar": "Cafe / Coffee Shop",
-            "pharmacy": "Pharmacy", "hospital": "Hospital",
-            "clinic": "Doctor", "dentist": "Dentist",
-            "doctors": "Doctor", "school": "School",
-            "college": "University", "university": "University",
-            "kindergarten": "School",
-            "fuel": "Car Repair Garage", "car_wash": "Car Repair Garage",
-            "car_rental": "Car Rental",
-            "bank": "Accountant", "atm": "Accountant",
-            # shop
-            "supermarket": "Supermarket", "convenience": "Local Shop",
-            "clothes": "Clothing Store", "shoes": "Shoe Store",
-            "jewelry": "Jewelry Store", "electronics": "Electronics Store",
-            "computer": "Computer Store", "mobile_phone": "Phone Repair Shop",
-            "bakery": "Bakery", "butcher": "Local Shop",
-            "furniture": "Furniture Manufacturer", "hardware": "Local Shop",
-            "books": "Local Shop", "gift": "Local Shop",
-            "beauty": "Beauty Salon", "hairdresser": "Barber Shop",
-            # tourism
-            "hotel": "Hotel", "motel": "Hotel", "resort": "Resort",
-            "guest_house": "Hotel",
-            # office
-            "lawyer": "Lawyer", "accountant": "Accountant",
-            "architect": "Architect", "company": "Software Company",
-            "consulting": "Consultant", "estate_agent": "Real Estate Platform",
-            # healthcare
-            "doctor": "Doctor", "dentist": "Dentist", "clinic": "Doctor",
-            "hospital": "Hospital", "optometrist": "Doctor",
-            # craft
-            "carpenter": "Furniture Manufacturer", "electrician": "Local Shop",
-            "plumber": "Local Shop",
-        }
+        try:
+            async with self._rate_limiter.acquire():
+                async with self._domain_limiter.politeness(url):
+                    await self._anti_block.introduce_jitter(base_delay=0.5)
+                    response = await self.client.get(
+                        url,
+                        params=params,
+                        headers=final_headers,
+                        timeout=timeout or 15.0,
+                    )
+                    if response.status_code != 200:
+                        self._logger.debug(
+                            "Non-200 (%d) from %s", response.status_code, url,
+                        )
+                        return None
+                    return response
+        except httpx.HTTPError as exc:
+            self._logger.debug("Network error fetching %s: %s", url, exc)
+            return None
+        except Exception as exc:
+            self._logger.debug("Unexpected error fetching %s: %s", url, exc)
+            return None
 
-        for tag_val in (amenity, shop, tourism, office, healthcare, craft):
-            if tag_val and tag_val in mapping:
-                return mapping[tag_val]
 
-        # Fallbacks based on individual tags
-        if amenity or shop or tourism or office or healthcare or craft:
-            return "Local Shop"
-        return "Other"
+def _host_of(url: str) -> str:
+    """Extract the Host header value from a URL (without scheme/path)."""
+    from urllib.parse import urlparse
+    return urlparse(url).netloc

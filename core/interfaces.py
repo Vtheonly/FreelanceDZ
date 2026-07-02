@@ -1,149 +1,348 @@
-"""Abstract base classes (contracts) for the entire platform.
+"""Abstract contracts (ports) for every adapter in the engine.
 
-Every concrete adapter in `infrastructure/` MUST implement one of these
-interfaces. This guarantees that:
-  * Services depend on abstractions, not concrete classes (Dependency Inversion).
-  * Any scraper / LLM / repository can be swapped without touching services.
-  * Unit tests can inject mock implementations trivially.
+The application depends on these interfaces, never on concrete classes.
+This is the Dependency Inversion Principle in action: high-level policy
+(services) does not import low-level detail (httpx, sqlite3, openai);
+both depend on the abstractions defined here.
+
+Concrete implementations live in ``infrastructure/`` and are wired into
+services by ``api/dependencies.py``.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, AsyncIterator, Optional, Protocol
 
-from domain.models import BusinessRaw, Lead, LeadAnalysis
+from domain.enums import CrawlStatus, FreshnessAge, LeadStatus
+from domain.models import BusinessRaw, Lead, LeadAnalysis, RawRecord, ResolvedEntity
+from domain.value_objects import PhoneDetails
 
 
-# ============================================================================
+# ============================================================
 #  SCRAPERS
-# ============================================================================
+# ============================================================
 
 class IScraper(ABC):
-    """Discovers raw business records from a single source (OSM, DDG, mock, ...)."""
+    """Discovers raw business records from a single source.
+
+    Every scraper is async because the whole engine is async — there is no
+    synchronous fallback. Implementations MUST:
+
+    * Return an empty list (not raise) on network failure so the aggregator
+      can continue with the next source.
+    * Tag every ``BusinessRaw`` with the correct ``DataSource``.
+    * Honour the configured timeout per request.
+    * Apply pagination internally when ``limit`` exceeds a single page.
+    """
 
     @property
     @abstractmethod
     def source_name(self) -> str:
-        """A short, stable identifier (e.g. 'overpass', 'duckduckgo', 'mock')."""
+        """Short, stable identifier (e.g. 'duckduckgo', 'overpass')."""
 
     @abstractmethod
-    def discover_businesses(
+    async def discover(
         self,
         query: str,
         wilaya: Optional[str] = None,
         limit: int = 10,
-    ) -> List[BusinessRaw]:
-        """Return up to `limit` businesses matching `query` near `wilaya`.
-
-        Implementations MUST:
-          * Be safe to call when offline / rate-limited (return [] rather than raise).
-          * Tag every returned BusinessRaw with the correct `DataSource`.
-          * Never block forever — respect the configured timeout.
-        """
+    ) -> list[BusinessRaw]:
+        """Return up to ``limit`` businesses matching ``query`` near ``wilaya``."""
 
 
-# ============================================================================
+class IScraperPlugin(IScraper):
+    """Extension point for platform-specific scrapers (Facebook, Instagram, etc.).
+
+    Plugins are loaded dynamically by the aggregator based on configuration.
+    A plugin differs from a base scraper in that it accepts a *target URL*
+    (a specific profile/page) rather than a free-text query.
+    """
+
+    @abstractmethod
+    async def scrape_target(self, url: str) -> Optional[BusinessRaw]:
+        """Scrape a specific profile/page URL and return a business record."""
+
+
+# ============================================================
+#  AGGREGATOR
+# ============================================================
+
+class IDiscoveryAggregator(ABC):
+    """Coordinates multiple scrapers to exhaustively reach a target limit.
+
+    The aggregator is responsible for:
+
+    * Expanding the query (FR / AR / Darja) before dispatching.
+    * Cycling through scrapers and paginated queries until ``limit`` valid
+      records are gathered (or every source is genuinely exhausted).
+    * Deduplicating within the run via ``BusinessRaw.fingerprint()``.
+    * Never raising — partial results are always returned.
+    """
+
+    @abstractmethod
+    async def discover_exhaustive(
+        self,
+        query: str,
+        wilaya: Optional[str] = None,
+        limit: int = 30,
+    ) -> list[BusinessRaw]:
+        ...
+
+
+# ============================================================
+#  HTTP CLIENT (managed pool)
+# ============================================================
+
+class IHttpClient(Protocol):
+    """Minimal async HTTP contract — subset of ``httpx.AsyncClient``.
+
+    Defined as a Protocol so any duck-typed async client works, but in
+    practice we always use the managed ``httpx.AsyncClient`` singleton.
+    """
+
+    async def get(self, url: str, **kwargs: Any) -> Any: ...
+    async def post(self, url: str, **kwargs: Any) -> Any: ...
+    async def aclose(self) -> None: ...
+
+
+# ============================================================
 #  LLM CLIENTS
-# ============================================================================
+# ============================================================
 
 class ILLMClient(ABC):
-    """Calls an LLM provider to analyse a business and produce a `LeadAnalysis`."""
+    """Calls an LLM provider to analyse a business and produce a ``LeadAnalysis``.
+
+    Implementations MUST:
+    * Handle HTTP 429 with exponential backoff (delegated to ``tenacity``).
+    * Cache responses when caching is enabled.
+    * Fall back to a deterministic heuristic if all retries fail.
+    """
 
     @property
     @abstractmethod
-    def provider_name(self) -> str:
-        """Provider identifier (e.g. 'groq', 'openrouter')."""
+    def provider_name(self) -> str: ...
 
     @abstractmethod
-    def analyze_business_needs(self, business: BusinessRaw) -> LeadAnalysis:
-        """Analyse a business and return a structured `LeadAnalysis`.
-
-        Implementations MUST:
-          * Handle HTTP 429 with exponential backoff.
-          * Cache responses when caching is enabled.
-          * Fall back to a deterministic heuristic if all retries fail.
-        """
+    async def analyze_business_needs(self, business: BusinessRaw) -> LeadAnalysis: ...
 
     @abstractmethod
-    def health_check(self) -> bool:
-        """Lightweight ping — returns True if the provider is reachable & authed."""
+    async def expand_query(self, query: str) -> list[str]:
+        """Return FR / MSA / Darja variants of ``query``."""
+
+    @abstractmethod
+    async def health_check(self) -> bool: ...
 
 
-# ============================================================================
+# ============================================================
 #  LEAD PRIORITIZER
-# ============================================================================
+# ============================================================
 
 class ILeadPrioritizer(ABC):
     """Computes a deterministic priority score (0–100) for a lead."""
 
     @abstractmethod
-    def calculate_score(self, lead: Lead) -> float:
-        """Return a score in [0.0, 100.0]."""
+    def calculate_score(self, lead: Lead) -> float: ...
 
     @abstractmethod
-    def explain_score(self, lead: Lead) -> Dict[str, float]:
-        """Return a per-factor breakdown of the score for transparency/debug."""
+    def explain_score(self, lead: Lead) -> dict[str, float]: ...
 
 
-# ============================================================================
-#  REPOSITORY
-# ============================================================================
+# ============================================================
+#  REPOSITORIES
+# ============================================================
 
-class ILeadRepository(ABC):
-    """Persistent storage for leads."""
-
-    @abstractmethod
-    def init_schema(self) -> None:
-        """Create tables/indexes if they don't exist (idempotent)."""
+class IRawRecordRepository(ABC):
+    """CRUD for the ``raw_records`` table (immutable scrape results)."""
 
     @abstractmethod
-    def save_business(self, business: BusinessRaw) -> Optional[int]:
-        """Insert (or skip if duplicate by fingerprint). Return row id or None if dup."""
+    async def save(self, business: BusinessRaw) -> Optional[int]:
+        """Insert or update on fingerprint conflict. Returns row id."""
 
     @abstractmethod
-    def attach_analysis(self, business_id: int, analysis: LeadAnalysis) -> None:
-        """Persist the LLM analysis for an existing business."""
+    async def get_by_id(self, record_id: int) -> Optional[RawRecord]: ...
 
     @abstractmethod
-    def update_score(self, business_id: int, score: float) -> None:
-        """Update the priority score of an existing business."""
+    async def list_all(self, limit: int = 1000, offset: int = 0) -> list[RawRecord]: ...
 
     @abstractmethod
-    def list_unanalyzed(self, limit: int = 100) -> List[Lead]:
-        """Return leads that have no analysis attached yet."""
+    async def list_unresolved(self, limit: int = 1000) -> list[RawRecord]: ...
 
     @abstractmethod
-    def list_leads(
+    async def count(self) -> int: ...
+
+
+class IResolvedEntityRepository(ABC):
+    """CRUD for the ``resolved_entities`` table (golden records)."""
+
+    @abstractmethod
+    async def upsert(self, entity: ResolvedEntity) -> Optional[int]: ...
+
+    @abstractmethod
+    async def get_by_id(self, entity_id: int) -> Optional[ResolvedEntity]: ...
+
+    @abstractmethod
+    async def list_all(
         self,
         wilaya: Optional[str] = None,
         industry: Optional[str] = None,
+        min_confidence: float = 0.0,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ResolvedEntity]: ...
+
+    @abstractmethod
+    async def count(self) -> int: ...
+
+    @abstractmethod
+    async def delete_all(self) -> int: ...
+
+    @abstractmethod
+    async def get_lineage(self, entity_id: int) -> list[dict]:
+        """Return every raw record that contributed to ``entity_id``."""
+
+
+class ILeadRepository(ABC):
+    """Read-side repository that joins raw records + analyses + scores."""
+
+    @abstractmethod
+    async def attach_analysis(self, business_id: int, analysis: LeadAnalysis) -> None: ...
+
+    @abstractmethod
+    async def update_score(
+        self, business_id: int, score: float, breakdown: Optional[dict[str, float]] = None
+    ) -> None: ...
+
+    @abstractmethod
+    async def set_status(self, business_id: int, status: LeadStatus) -> None: ...
+
+    @abstractmethod
+    async def set_tags(self, business_id: int, tags: list[str]) -> None: ...
+
+    @abstractmethod
+    async def get_lead(self, lead_id: int) -> Optional[Lead]: ...
+
+    @abstractmethod
+    async def list_leads(
+        self,
+        wilaya: Optional[str] = None,
+        industry: Optional[str] = None,
+        age_class: Optional[FreshnessAge] = None,
         min_score: float = 0.0,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[Lead]:
-        """Filter/sort leads. Sorted by priority_score desc."""
+    ) -> list[Lead]: ...
 
     @abstractmethod
-    def get_lead(self, lead_id: int) -> Optional[Lead]:
-        """Fetch a single lead by ID."""
+    async def count_leads(self) -> int: ...
 
     @abstractmethod
-    def count_leads(self) -> int:
-        """Total number of leads in the database."""
+    async def count_analyzed(self) -> int: ...
 
     @abstractmethod
-    def count_analyzed(self) -> int:
-        """Number of leads with an analysis attached."""
+    async def search(self, term: str, limit: int = 50) -> list[Lead]: ...
 
     @abstractmethod
-    def search(self, term: str, limit: int = 50) -> List[Lead]:
-        """Full-text search across business name / industry / wilaya."""
+    async def stats(self) -> dict[str, Any]: ...
+
+
+class ICrawlQueueRepository(ABC):
+    """Persistent priority queue for the infinite crawler."""
 
     @abstractmethod
-    def stats(self) -> Dict[str, Any]:
-        """Aggregate statistics for the dashboard."""
-    
+    async def add_url(self, url: str, priority: int = 1, depth: int = 0) -> bool: ...
+
     @abstractmethod
-    def set_tags(self, business_id: int, tags: List[str]) -> None:
-        """Update custom user tags for a business."""
+    async def get_next_url(self) -> Optional[tuple[int, str, int]]:
+        """Returns ``(queue_id, url, depth)`` or ``None`` if queue is empty."""
+
+    @abstractmethod
+    async def update_status(self, queue_id: int, success: bool) -> None: ...
+
+    @abstractmethod
+    async def count_by_status(self, status: CrawlStatus) -> int: ...
+
+    @abstractmethod
+    async def reset_stale_processing(self, older_than_seconds: int = 600) -> int: ...
+
+
+# ============================================================
+#  ENTITY RESOLVER
+# ============================================================
+
+class IEntityResolver(ABC):
+    """Merges duplicate raw records into golden ``ResolvedEntity`` rows."""
+
+    @abstractmethod
+    async def resolve(self, records: list[RawRecord]) -> list[ResolvedEntity]:
+        """Run graph-based resolution and return the merged entities."""
+
+
+# ============================================================
+#  RESILIENCE
+# ============================================================
+
+class IProxyOrchestrator(ABC):
+    """Stateful proxy pool with health tracking and block detection."""
+
+    @abstractmethod
+    def get_proxy(self) -> Optional[str]: ...
+
+    @abstractmethod
+    def report_outcome(self, proxy_url: str, success: bool) -> None: ...
+
+    @abstractmethod
+    def evaluate_response(self, response: Any) -> bool:
+        """Return True if the response looks like a block / CAPTCHA page."""
+
+
+# ============================================================
+#  PHONE VALIDATOR
+# ============================================================
+
+class IPhoneValidator(ABC):
+    """Extracts and validates phone numbers from raw text."""
+
+    @abstractmethod
+    def extract_and_validate(
+        self, text: str, default_region: str = "DZ"
+    ) -> list[PhoneDetails]: ...
+
+
+# ============================================================
+#  FRESHNESS DETECTOR
+# ============================================================
+
+class IFreshnessDetector(ABC):
+    """Extracts temporal metadata from text/headers."""
+
+    @abstractmethod
+    def detect(
+        self,
+        text: str,
+        headers: Optional[dict[str, str]] = None,
+    ) -> "Any":
+        """Return a ``FreshnessMetadata`` value object."""
+
+
+# ============================================================
+#  SPAM FILTER
+# ============================================================
+
+class ISpamFilter(ABC):
+    """Decides whether a URL/title is a directory aggregator or spam."""
+
+    @abstractmethod
+    def is_spam(self, url: str, title: str) -> bool: ...
+
+
+# ============================================================
+#  QUERY EXPANDER
+# ============================================================
+
+class IQueryExpander(ABC):
+    """Expands a base query into FR / MSA / Darja variants."""
+
+    @abstractmethod
+    async def expand(self, base_query: str) -> list[str]: ...

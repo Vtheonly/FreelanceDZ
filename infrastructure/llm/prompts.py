@@ -1,97 +1,75 @@
-"""LLM prompt templates — single source of truth for what we ask the model.
+"""Prompt templates for LLM calls.
 
-Keeping prompts here (rather than inline in client code) makes them easy to
-iterate on without touching Python logic.
+Centralising prompts here means we can A/B test them, version them, and
+audit them without touching client code. Each prompt is a plain string
+with ``{placeholder}`` markers filled by ``str.format``.
 """
 
 from __future__ import annotations
 
-from config.industries import resolve_industry
-from config.services_catalog import all_service_names
 
-
-SYSTEM_PROMPT = (
-    "You are an expert Algerian enterprise software development consultant.\n"
-    "You analyse local businesses and identify which custom software services "
-    "they would genuinely benefit from, given the Algerian market reality "
-    "(low web adoption, heavy reliance on Facebook/Instagram, growing e-payments via CIB / Edahabia).\n\n"
-    "Your output MUST be valid JSON matching the schema requested. "
-    "Do not include any markdown, code fences, or commentary outside the JSON.\n"
+SYSTEM_PROMPT_ANALYZER = (
+    "You are a senior B2B sales analyst specialised in the Algerian market.\n"
+    "You receive a JSON description of a discovered business and must produce\n"
+    "a structured analysis covering pain points, recommended software services,\n"
+    "and pitch angles. All reasoning must be grounded in the provided data —\n"
+    "never invent facts. If a field is missing, say so explicitly.\n"
+    "Always respond with valid JSON matching the requested schema and nothing else."
 )
 
 
-def build_user_prompt(business) -> str:
-    """Build the user-side prompt for a single business.
+PROMPT_ANALYZE_BUSINESS = """\
+Analyse the following Algerian business and produce a B2B sales analysis.
 
-    Args:
-        business: a `domain.models.BusinessRaw` instance.
+Business data (JSON):
+{business_json}
 
-    Returns:
-        A multi-line prompt string ending with the strict JSON schema.
-    """
-    industry_template = resolve_industry(business.industry)
-    typical = ", ".join(industry_template.typical_services[:5]) or "n/a"
-    services_list = ", ".join(all_service_names())
-
-    has_website = "YES" if business.website else "NO"
-    has_social = "YES" if business.social_media_handles else "NO"
-    social_str = ", ".join(business.social_media_handles) if business.social_media_handles else "NONE"
-
-    return f"""Analyse the following Algerian business and recommend which custom software services we should pitch to them.
-
-BUSINESS DETAILS:
-- Name: {business.name}
-- Industry: {business.industry}
-- Wilaya (Province): {business.wilaya}, Algeria
-- Has Website: {has_website}
-- Website URL: {business.website or 'NONE'}
-- Phone: {business.phone or 'NONE'}
-- Email: {business.email or 'NONE'}
-- Social Media: {social_str}
-- Public Rating: {business.rating}/5.0 from {business.review_count} reviews
-- Address: {business.address or 'NONE'}
-
-INDUSTRY CONTEXT:
-- Typical services needed for {business.industry}: {typical}
-- Average project value in this industry (USD): {industry_template.average_project_value_usd}
-
-ALLOWED SERVICES (use these exact names when relevant):
-{services_list}
-
-Return a SINGLE JSON object matching EXACTLY this schema (no extra keys, no markdown):
-
+Return a JSON object with EXACTLY this shape (no markdown, no commentary):
 {{
-  "pain_points": [
-    "specific operational pain point 1",
-    "specific operational pain point 2",
-    "specific operational pain point 3"
-  ],
+  "pain_points": ["..."],
   "recommended_solutions": [
     {{
-      "service_name": "exact service name from the allowed list",
-      "justification": "one-sentence reason this specific business needs it",
-      "estimated_value_usd": 1500.00,
-      "priority": 8
+      "service_name": "...",
+      "justification": "...",
+      "estimated_value_usd": 0.0,
+      "priority": 5
     }}
   ],
-  "digital_presence_score": 45,
-  "pitch_angles": [
-    "sales hook 1 — appeal to revenue growth or cost cutting",
-    "sales hook 2 — appeal to competitor pressure or customer expectations"
-  ],
-  "estimated_monthly_revenue_usd": 8000.00
+  "digital_presence_score": 50,
+  "pitch_angles": ["..."],
+  "estimated_monthly_revenue_usd": null
 }}
 
 Rules:
-- Provide 2 to 4 pain_points.
-- Provide 2 to 5 recommended_solutions, ordered by priority (highest first).
-- `priority` is an integer 1–10 (10 = must pitch immediately).
-- `digital_presence_score` is 0–100 (0 = no presence, 100 = excellent).
-- `estimated_value_usd` should reflect Algerian market rates (lower than EU/US).
-- All text in English.
+- pain_points: 2-5 concrete operational problems this business likely faces.
+- recommended_solutions: 1-3 software services relevant to its industry.
+- estimated_value_usd: realistic project size in USD for the Algerian market.
+- priority: 1 (low) to 10 (must-pitch).
+- digital_presence_score: 0 (no presence) to 100 (excellent).
+- pitch_angles: 1-3 hooks a salesperson could use in the first email.
+- If the business name or industry looks like a directory listing or
+  aggregator page (e.g. "List of pharmacies in Oran"), return an empty
+  recommended_solutions array and set digital_presence_score to 0.
 """
 
 
-def build_health_check_prompt() -> str:
-    """A minimal prompt used by `health_check()` to verify the API works."""
-    return 'Reply with the JSON object: {"status":"ok"}. No other text.'
+SYSTEM_PROMPT_QUERY_EXPANDER = (
+    "You are an expert Algerian market intelligence analyst.\n"
+    "Your task is to expand a business query into related keywords, synonyms,\n"
+    "and localized phrases covering French, Modern Standard Arabic, and\n"
+    "Algerian Darja. Return a JSON array of strings only — no markdown,\n"
+    "no commentary."
+)
+
+
+PROMPT_EXPAND_QUERY = """\
+User Query: "{query}"
+
+Generate exactly 6 to 9 highly relevant search terms covering:
+1. Professional French terminology used in Algeria.
+2. Modern Standard Arabic (MSA) industrial/commercial equivalents.
+3. Local Algerian Arabic (Darja) colloquial terms.
+
+Return a JSON array of strings ONLY.
+Example: ["term1", "term2", "term3"]
+"""
