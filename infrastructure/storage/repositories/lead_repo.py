@@ -26,6 +26,9 @@ _logger = logging.getLogger("storage.lead_repo")
 class LeadRepository(ILeadRepository):
     """Read-side lead view composed from raw_records + analyses + lead_scores."""
 
+    _vocab_cache: Optional[list[str]] = None
+    _vocab_cache_time: Optional[float] = None
+
     def __init__(self, db: DatabaseManager) -> None:
         self._db = db
 
@@ -133,6 +136,88 @@ class LeadRepository(ILeadRepository):
                 )
         await asyncio.to_thread(_execute)
 
+    async def set_contact_status(self, business_id: int, is_contact: bool) -> None:
+        def _execute():
+            with self._db.connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO lead_scores (raw_record_id, priority_score, status, is_contact, computed_at)
+                    VALUES (?, 0.0, 'discovered', ?, ?)
+                    ON CONFLICT(raw_record_id) DO UPDATE SET is_contact = excluded.is_contact, computed_at = excluded.computed_at
+                    """,
+                    (business_id, int(is_contact), _now_iso()),
+                )
+        await asyncio.to_thread(_execute)
+
+    async def update_lead_details(
+        self,
+        business_id: int,
+        name: str,
+        tags: list[str],
+        address: Optional[str] = None,
+        website: Optional[str] = None,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> None:
+        tags_json = json.dumps(tags, ensure_ascii=False)
+        def _execute():
+            with self._db.connection() as conn:
+                # Update attributes in raw_records
+                conn.execute(
+                    """
+                    UPDATE raw_records
+                    SET name = ?, address = ?, website = ?, phone = ?, email = ?
+                    WHERE id = ?
+                    """,
+                    (name, address, website, phone, email, business_id),
+                )
+                # Update lead_scores
+                conn.execute(
+                    """
+                    INSERT INTO lead_scores (raw_record_id, priority_score, status, tags, computed_at)
+                    VALUES (?, 0.0, 'discovered', ?, ?)
+                    ON CONFLICT(raw_record_id) DO UPDATE SET tags = excluded.tags, computed_at = excluded.computed_at
+                    """,
+                    (business_id, tags_json, _now_iso()),
+                )
+        await asyncio.to_thread(_execute)
+
+    async def bulk_set_contact_status(self, business_ids: list[int], is_contact: bool) -> None:
+        if not business_ids:
+            return
+        def _execute():
+            now = _now_iso()
+            with self._db.connection() as conn:
+                for b_id in business_ids:
+                    conn.execute(
+                        """
+                        INSERT INTO lead_scores (raw_record_id, priority_score, status, is_contact, computed_at)
+                        VALUES (?, 0.0, 'discovered', ?, ?)
+                        ON CONFLICT(raw_record_id) DO UPDATE SET is_contact = excluded.is_contact, computed_at = excluded.computed_at
+                        """,
+                        (b_id, int(is_contact), now),
+                    )
+        await asyncio.to_thread(_execute)
+        _logger.info("Successfully completed bulk contacts toggle for %d records", len(business_ids))
+
+    async def bulk_set_status(self, business_ids: list[int], status: LeadStatus) -> None:
+        if not business_ids:
+            return
+        def _execute():
+            now = _now_iso()
+            with self._db.connection() as conn:
+                for b_id in business_ids:
+                    conn.execute(
+                        """
+                        INSERT INTO lead_scores (raw_record_id, priority_score, status, computed_at)
+                        VALUES (?, 0.0, ?, ?)
+                        ON CONFLICT(raw_record_id) DO UPDATE SET status = excluded.status, computed_at = excluded.computed_at
+                        """,
+                        (b_id, status.value, now),
+                    )
+        await asyncio.to_thread(_execute)
+        _logger.info("Successfully completed bulk status update for %d records", len(business_ids))
+
     # ------------------------------------------------------------------
     #  Reads
     # ------------------------------------------------------------------
@@ -151,11 +236,10 @@ class LeadRepository(ILeadRepository):
         industry: Optional[str] = None,
         age_class: Optional[FreshnessAge] = None,
         min_score: float = 0.0,
+        is_contact: Optional[bool] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[Lead]:
-        # COALESCE handles newly discovered leads that do not have scores yet
-        # Second clause strictly filters out blocked leads (status = 'rejected')
         clauses = [
             "COALESCE(s.priority_score, 0.0) >= ?",
             "COALESCE(s.status, 'discovered') != 'rejected'"
@@ -170,6 +254,10 @@ class LeadRepository(ILeadRepository):
         if age_class:
             clauses.append("r.calculated_age_class = ?")
             params.append(age_class.value)
+        if is_contact is not None:
+            clauses.append("COALESCE(s.is_contact, 0) = ?")
+            params.append(1 if is_contact else 0)
+
         where = " WHERE " + " AND ".join(clauses)
         sql = (
             self._base_query()
@@ -196,23 +284,25 @@ class LeadRepository(ILeadRepository):
                 return conn.execute("SELECT COUNT(*) FROM analyses a JOIN lead_scores s ON s.raw_record_id = a.raw_record_id WHERE COALESCE(s.status, 'discovered') != 'rejected'").fetchone()[0]
         return await asyncio.to_thread(_execute)
 
-    async def search(self, term: str, limit: int = 50) -> list[Lead]:
-        """Use the FTS5 mirror for fast full-text search, excluding blocked leads."""
+    async def search(self, term: str, is_contact: Optional[bool] = None, limit: int = 50) -> list[Lead]:
         sql = """
-            SELECT r.*
+            SELECT r.*, s.status, s.tags, s.priority_score, s.score_breakdown, COALESCE(s.is_contact, 0) AS is_contact
             FROM raw_records_fts f
             JOIN raw_records r ON r.id = f.rowid
             LEFT JOIN lead_scores s ON s.raw_record_id = r.id
             WHERE raw_records_fts MATCH ?
               AND COALESCE(s.status, 'discovered') != 'rejected'
-            ORDER BY rank
-            LIMIT ?
         """
-        fts_query = _build_fts_query(term)
+        params = [term]
+        if is_contact is not None:
+            sql += " AND COALESCE(s.is_contact, 0) = ?"
+            params.append(1 if is_contact else 0)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
 
         def _execute():
             with self._db.connection() as conn:
-                return conn.execute(sql, (fts_query, limit)).fetchall()
+                return conn.execute(sql, params).fetchall()
         rows = await asyncio.to_thread(_execute)
         return [self._row_to_lead(r, fetch_relations=False) for r in rows]
 
@@ -264,6 +354,35 @@ class LeadRepository(ILeadRepository):
                 }
         return await asyncio.to_thread(_execute)
 
+    async def get_search_vocabulary(self) -> list[str]:
+        import time
+        now = time.monotonic()
+        if self._vocab_cache is not None and self._vocab_cache_time is not None:
+            if now - self._vocab_cache_time < 30.0:  # Cache vocabulary list for 30 seconds
+                return self._vocab_cache
+
+        def _execute():
+            import re
+            with self._db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT name, industry, wilaya, address, website, email, phone FROM raw_records"
+                ).fetchall()
+                words = set()
+                for row in rows:
+                    for field in row:
+                        if field:
+                            # Tokenize and retain letters, numbers, hyphens, and apostrophes
+                            tokens = re.findall(r"\b[\w\-']+\b", str(field), re.UNICODE)
+                            for t in tokens:
+                                if len(t) >= 2:
+                                    words.add(t)
+                return sorted(list(words))
+
+        vocab = await asyncio.to_thread(_execute)
+        self._vocab_cache = vocab
+        self._vocab_cache_time = now
+        return vocab
+
     # ------------------------------------------------------------------
     #  Internals
     # ------------------------------------------------------------------
@@ -279,7 +398,8 @@ class LeadRepository(ILeadRepository):
                 a.pain_points, a.recommended_solutions, a.digital_presence_score,
                 a.pitch_angles, a.estimated_monthly_revenue_usd, a.analysis_model,
                 a.from_cache, a.analyzed_at,
-                s.priority_score, s.score_breakdown, s.status, s.tags, s.computed_at
+                s.priority_score, s.score_breakdown, s.status, s.tags, s.computed_at,
+                COALESCE(s.is_contact, 0) AS is_contact
             FROM raw_records r
             LEFT JOIN analyses  a ON a.raw_record_id = r.id
             LEFT JOIN lead_scores s ON s.raw_record_id = r.id
@@ -346,6 +466,8 @@ class LeadRepository(ILeadRepository):
             else None
         )
 
+        is_contact_val = bool(row["is_contact"]) if "is_contact" in row.keys() else False
+
         return Lead(
             id=row["id"],
             business=business,
@@ -354,6 +476,7 @@ class LeadRepository(ILeadRepository):
             score_breakdown=breakdown,
             status=status,
             tags=tags,
+            is_contact=is_contact_val,
             created_at=_parse_dt(row["created_at"]) or datetime.now(timezone.utc),
             updated_at=_parse_dt(row["computed_at"]) or datetime.now(timezone.utc),
         )
@@ -370,16 +493,3 @@ def _parse_dt(value) -> Optional[datetime]:
         return datetime.fromisoformat(value)
     except (ValueError, TypeError):
         return None
-
-
-def _build_fts_query(term: str) -> str:
-    """Convert a free-text search term into an FTS5 query string.
-
-    Splits on whitespace and ORs the tokens so a search for "pharmacie
-    oran" matches any record containing either word.
-    """
-    if not term:
-        return '""'
-    # Escape double quotes and wrap each token in quotes.
-    tokens = [f'"{t.replace("\"", "\"\"")}"' for t in term.split() if t]
-    return " OR ".join(tokens) if tokens else '""'

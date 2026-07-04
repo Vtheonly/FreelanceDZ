@@ -5,8 +5,8 @@ This is the Dependency Inversion Principle in action: high-level policy
 (services) does not import low-level detail (httpx, sqlite3, openai);
 both depend on the abstractions defined here.
 
-Concrete implementations live in ``infrastructure/`` and are wired into
-services by ``api/dependencies.py``.
+Concrete implementations live in "infrastructure/" and are wired into
+services by "api/dependencies.py".
 """
 
 from __future__ import annotations
@@ -32,9 +32,9 @@ class IScraper(ABC):
 
     * Return an empty list (not raise) on network failure so the aggregator
       can continue with the next source.
-    * Tag every ``BusinessRaw`` with the correct ``DataSource``.
+    * Tag every "BusinessRaw" with the correct "DataSource".
     * Honour the configured timeout per request.
-    * Apply pagination internally when ``limit`` exceeds a single page.
+    * Apply pagination internally when "limit" exceeds a single page.
     """
 
     @property
@@ -49,7 +49,7 @@ class IScraper(ABC):
         wilaya: Optional[str] = None,
         limit: int = 10,
     ) -> list[BusinessRaw]:
-        """Return up to ``limit`` businesses matching ``query`` near ``wilaya``."""
+        """Return up to "limit" businesses matching "query" near "wilaya"."""
 
 
 class IScraperPlugin(IScraper):
@@ -75,9 +75,9 @@ class IDiscoveryAggregator(ABC):
     The aggregator is responsible for:
 
     * Expanding the query (FR / AR / Darja) before dispatching.
-    * Cycling through scrapers and paginated queries until ``limit`` valid
+    * Cycling through scrapers and paginated queries until "limit" valid
       records are gathered (or every source is genuinely exhausted).
-    * Deduplicating within the run via ``BusinessRaw.fingerprint()``.
+    * Deduplicating within the run via "BusinessRaw.fingerprint()".
     * Never raising — partial results are always returned.
     """
 
@@ -96,10 +96,10 @@ class IDiscoveryAggregator(ABC):
 # ============================================================
 
 class IHttpClient(Protocol):
-    """Minimal async HTTP contract — subset of ``httpx.AsyncClient``.
+    """Minimal async HTTP contract — subset of "httpx.AsyncClient".
 
     Defined as a Protocol so any duck-typed async client works, but in
-    practice we always use the managed ``httpx.AsyncClient`` singleton.
+    practice we always use the managed "httpx.AsyncClient" singleton.
     """
 
     async def get(self, url: str, **kwargs: Any) -> Any: ...
@@ -112,10 +112,10 @@ class IHttpClient(Protocol):
 # ============================================================
 
 class ILLMClient(ABC):
-    """Calls an LLM provider to analyse a business and produce a ``LeadAnalysis``.
+    """Calls an LLM provider to analyse a business and produce a "LeadAnalysis".
 
     Implementations MUST:
-    * Handle HTTP 429 with exponential backoff (delegated to ``tenacity``).
+    * Handle HTTP 429 with exponential backoff (delegated to "tenacity").
     * Cache responses when caching is enabled.
     * Fall back to a deterministic heuristic if all retries fail.
     """
@@ -129,7 +129,7 @@ class ILLMClient(ABC):
 
     @abstractmethod
     async def expand_query(self, query: str) -> list[str]:
-        """Return FR / MSA / Darja variants of ``query``."""
+        """Return FR / MSA / Darja variants of "query"."""
 
     @abstractmethod
     async def health_check(self) -> bool: ...
@@ -154,7 +154,7 @@ class ILeadPrioritizer(ABC):
 # ============================================================
 
 class IRawRecordRepository(ABC):
-    """CRUD for the ``raw_records`` table (immutable scrape results)."""
+    """CRUD for the "raw_records" table (immutable scrape results)."""
 
     @abstractmethod
     async def save(self, business: BusinessRaw) -> Optional[int]:
@@ -174,7 +174,7 @@ class IRawRecordRepository(ABC):
 
 
 class IResolvedEntityRepository(ABC):
-    """CRUD for the ``resolved_entities`` table (golden records)."""
+    """CRUD for the "resolved_entities" table (golden records)."""
 
     @abstractmethod
     async def upsert(self, entity: ResolvedEntity) -> Optional[int]: ...
@@ -200,7 +200,7 @@ class IResolvedEntityRepository(ABC):
 
     @abstractmethod
     async def get_lineage(self, entity_id: int) -> list[dict]:
-        """Return every raw record that contributed to ``entity_id``."""
+        """Return every raw record that contributed to "entity_id"."""
 
 
 class ILeadRepository(ABC):
@@ -230,6 +230,7 @@ class ILeadRepository(ABC):
         industry: Optional[str] = None,
         age_class: Optional[FreshnessAge] = None,
         min_score: float = 0.0,
+        is_contact: Optional[bool] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[Lead]: ...
@@ -241,10 +242,39 @@ class ILeadRepository(ABC):
     async def count_analyzed(self) -> int: ...
 
     @abstractmethod
-    async def search(self, term: str, limit: int = 50) -> list[Lead]: ...
+    async def search(self, term: str, is_contact: Optional[bool] = None, limit: int = 50) -> list[Lead]: ...
 
     @abstractmethod
     async def stats(self) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_contact_status(self, business_id: int, is_contact: bool) -> None:
+        """Mark a lead as a contact or remove it from the contacts list."""
+
+    @abstractmethod
+    async def update_lead_details(
+        self,
+        business_id: int,
+        name: str,
+        tags: list[str],
+        address: Optional[str] = None,
+        website: Optional[str] = None,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> None:
+        """Persist user overrides and inline modifications directly to raw records and metadata scores."""
+
+    @abstractmethod
+    async def get_search_vocabulary(self) -> list[str]:
+        """Tokenize and compile all unique, queryable words in the database for instant suggestions."""
+
+    @abstractmethod
+    async def bulk_set_contact_status(self, business_ids: list[int], is_contact: bool) -> None:
+        """Mark multiple leads as contacts or remove them from the contacts list in a single batch."""
+
+    @abstractmethod
+    async def bulk_set_status(self, business_ids: list[int], status: LeadStatus) -> None:
+        """Set the workflow status of multiple leads concurrently."""
 
 
 class ICrawlQueueRepository(ABC):
@@ -255,7 +285,7 @@ class ICrawlQueueRepository(ABC):
 
     @abstractmethod
     async def get_next_url(self) -> Optional[tuple[int, str, int]]:
-        """Returns ``(queue_id, url, depth)`` or ``None`` if queue is empty."""
+        """Returns "(queue_id, url, depth)" or "None" if queue is empty."""
 
     @abstractmethod
     async def update_status(self, queue_id: int, success: bool) -> None: ...
@@ -272,7 +302,7 @@ class ICrawlQueueRepository(ABC):
 # ============================================================
 
 class IEntityResolver(ABC):
-    """Merges duplicate raw records into golden ``ResolvedEntity`` rows."""
+    """Merges duplicate raw records into golden "ResolvedEntity" rows."""
 
     @abstractmethod
     async def resolve(self, records: list[RawRecord]) -> list[ResolvedEntity]:
@@ -323,7 +353,7 @@ class IFreshnessDetector(ABC):
         text: str,
         headers: Optional[dict[str, str]] = None,
     ) -> "Any":
-        """Return a ``FreshnessMetadata`` value object."""
+        """Return a "FreshnessMetadata" value object."""
 
 
 # ============================================================

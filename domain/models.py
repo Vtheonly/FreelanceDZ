@@ -1,17 +1,17 @@
 """Domain models — the canonical data shapes used across the engine.
 
-Every model is a Pydantic v2 ``BaseModel`` so we get validation, JSON
+Every model is a Pydantic v2 "BaseModel" so we get validation, JSON
 serialisation, and OpenAPI generation for free. Models are deliberately
-*immutable* (``model_config = ConfigDict(frozen=True)``) for the value
-objects and mutable for the aggregate roots (``Lead``, ``ResolvedEntity``)
+*immutable* ("model_config = ConfigDict(frozen=True)") for the value
+objects and mutable for the aggregate roots ("Lead", "ResolvedEntity")
 because their lifecycle is owned by the application.
 
 Design rules
 ------------
-* A ``BusinessRaw`` represents **exactly one scrape** — never a merged view.
-  Two scrapes of the same real-world business produce two ``BusinessRaw``
+* A "BusinessRaw" represents **exactly one scrape** — never a merged view.
+  Two scrapes of the same real-world business produce two "BusinessRaw"
   instances; the entity resolver merges them later.
-* The ``fingerprint()`` method is the **only** identity key used for
+* The "fingerprint()" method is the **only** identity key used for
   deduplication inside a single scrape run. Cross-run deduplication is the
   resolver's job (it uses graph similarity, not exact fingerprints).
 * Every timestamp is timezone-aware UTC.
@@ -45,8 +45,8 @@ class BusinessRaw(BaseModel):
     """A discovered business, exactly as extracted from a single source.
 
     This is the *immutable* unit of ingestion: every scraper produces a
-    stream of ``BusinessRaw`` instances, and the storage layer persists
-    them verbatim into ``raw_records``. Merging happens later, in the
+    stream of "BusinessRaw" instances, and the storage layer persists
+    them verbatim into "raw_records". Merging happens later, in the
     entity-resolution phase, and never mutates these objects.
     """
 
@@ -153,6 +153,7 @@ class Lead(BaseModel):
     score_breakdown: Optional[dict[str, float]] = None
     status: LeadStatus = Field(default=LeadStatus.DISCOVERED)
     tags: list[str] = Field(default_factory=list)
+    is_contact: bool = Field(default=False, description="Whether this lead is saved to the contacts/outreach queue")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -174,9 +175,9 @@ class Lead(BaseModel):
 # ============================================================
 
 class RawRecord(BaseModel):
-    """Storage-layer projection of a ``BusinessRaw`` row.
+    """Storage-layer projection of a "BusinessRaw" row.
 
-    Adds the database ``id`` and the ``fingerprint`` used as the unique
+    Adds the database "id" and the "fingerprint" used as the unique
     constraint. This is what the entity resolver reads from the database.
     """
 
@@ -204,7 +205,7 @@ class RawRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_business_raw(self) -> BusinessRaw:
-        """Reconstruct the in-memory ``BusinessRaw`` for downstream processing."""
+        """Reconstruct the in-memory "BusinessRaw" for downstream processing."""
         return BusinessRaw(
             name=self.name,
             industry=self.industry,
@@ -228,7 +229,7 @@ class RawRecord(BaseModel):
     def to_resolver_dict(self) -> dict[str, Any]:
         """Project to the minimal dict shape consumed by the graph resolver.
 
-        Mirrors ``BusinessRaw.to_resolver_dict`` so the resolver can work
+        Mirrors "BusinessRaw.to_resolver_dict" so the resolver can work
         uniformly with either type.
         """
         return {
@@ -247,9 +248,9 @@ class RawRecord(BaseModel):
 # ============================================================
 
 class ResolvedEntity(BaseModel):
-    """A golden record produced by merging one or more ``RawRecord`` rows.
+    """A golden record produced by merging one or more "RawRecord" rows.
 
-    The ``raw_record_ids`` list preserves lineage: a user can click through
+    The "raw_record_ids" list preserves lineage: a user can click through
     from a resolved entity back to every raw scrape that contributed to it.
     """
 

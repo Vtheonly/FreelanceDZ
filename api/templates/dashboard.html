@@ -393,6 +393,18 @@
             gap: 6px;
         }
 
+        .app-link {
+            color: var(--accent-glow);
+            text-decoration: none;
+            border-bottom: 1px dashed rgba(56, 189, 248, 0.4);
+            transition: color 0.1s;
+        }
+
+        .app-link:hover {
+            color: #7dd3fc;
+            border-bottom-style: solid;
+        }
+
         .copy-btn {
             background: transparent;
             border: 1px solid var(--border-secondary);
@@ -479,7 +491,7 @@
             color: var(--text-primary);
             font-size: 13px;
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-            z-index: 1000;
+            z-index: 10001;
             opacity: 0;
             transform: translateY(20px);
             transition: all 0.3s;
@@ -564,6 +576,88 @@
             margin-bottom: 16px;
             flex-shrink: 0;
         }
+
+        /* Autocomplete suggestions wrapper */
+        .autocomplete-wrapper {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+        }
+        .autocomplete-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background-color: var(--bg-panel);
+            border: 1px solid var(--border-secondary);
+            border-radius: 6px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.6);
+            z-index: 10001;
+            max-height: 220px;
+            overflow-y: auto;
+            margin-top: 4px;
+            display: none;
+        }
+        .autocomplete-item {
+            padding: 8px 12px;
+            font-size: 13px;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: background-color 0.1s;
+        }
+        .autocomplete-item:hover {
+            background-color: #1e2a4a;
+            color: var(--accent-glow);
+        }
+
+        /* Custom Hover Link Actions Context Menu Styles */
+        .context-menu {
+            position: absolute;
+            background-color: var(--bg-panel);
+            border: 1px solid var(--border-secondary);
+            border-radius: 6px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.6);
+            z-index: 10000;
+            display: none;
+            min-width: 140px;
+            padding: 4px 0;
+        }
+        .context-menu-item {
+            padding: 8px 12px;
+            font-size: 12px;
+            color: var(--text-primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background-color 0.15s;
+        }
+        .context-menu-item:hover {
+            background-color: #1e2a4a;
+            color: var(--accent-glow);
+        }
+
+        /* Contacts UI Tab Bar Styles */
+        .tabs-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border-primary);
+            padding-bottom: 8px;
+        }
+        .tabs-bar .btn {
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            border-radius: 0;
+            padding: 8px 16px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        .tabs-bar .btn.active {
+            color: var(--accent-glow);
+            border-bottom: 2px solid var(--accent-glow);
+        }
     </style>
 </head>
 
@@ -611,18 +705,42 @@
     <div class="workspace-grid">
         <!-- Main Data Panel -->
         <div class="data-panel">
+            <!-- Tabs Bar -->
+            <div class="tabs-bar">
+                <button class="btn active" id="allLeadsTabBtn" onclick="switchTab('all')">All Discovered Leads</button>
+                <button class="btn" id="contactsTabBtn" onclick="switchTab('contacts')">Contacts & Outreach</button>
+            </div>
+
+            <!-- Discovery Form -->
             <div class="discovery-form">
-                <input type="text" class="search-input" id="discoverQuery"
-                    placeholder="Industry to discover (e.g. pharmacie, menuiserie aluminium)">
-                <input type="text" class="search-input" id="discoverWilaya" placeholder="Wilaya (optional)">
-                <input type="number" class="search-input" id="discoverLimit" value="30" min="1" max="200"
-                    placeholder="Limit">
+                <div class="autocomplete-wrapper">
+                    <input type="text" class="search-input" id="discoverQuery" style="width: 100%;"
+                        placeholder="Industry to discover (e.g. pharmacie, menuiserie aluminium)" autocomplete="off">
+                    <div id="discoverQuery_autocomplete" class="autocomplete-dropdown"></div>
+                </div>
+                <div class="autocomplete-wrapper">
+                    <input type="text" class="search-input" id="discoverWilaya" style="width: 100%;" placeholder="Wilaya (optional)" autocomplete="off">
+                    <div id="discoverWilaya_autocomplete" class="autocomplete-dropdown"></div>
+                </div>
+                <input type="number" class="search-input" id="discoverLimit" value="30" min="1" max="200" placeholder="Limit" style="width: 80px;">
                 <button class="btn btn-primary" id="discoverBtn" onclick="runDiscovery()">Discover</button>
             </div>
 
+            <!-- Bulk actions toolbar -->
+            <div id="bulkActionBar" class="toolbar" style="display: none; background-color: #1a2236; border: 1px solid var(--border-secondary); padding: 8px 16px; border-radius: 6px; margin-bottom: 16px; align-items: center; justify-content: space-between;">
+                <span id="bulkActionText" style="font-size: 13px; font-weight: 600; color: var(--accent-glow);">0 items selected</span>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-primary" id="bulkContactActionBtn" onclick="bulkAddToContacts()">Add to Contacts</button>
+                    <button class="btn" style="background-color: rgba(251, 113, 133, 0.2); border-color: var(--accent-rose); color: #fb7185;" onclick="bulkBlockLeads()">Block Selected</button>
+                    <button class="btn" onclick="clearSelection()">Cancel</button>
+                </div>
+            </div>
+
             <div class="toolbar">
-                <input type="text" class="search-input" id="searchInput" placeholder="Filter by name, phone, address..."
-                    onkeyup="if(event.key==='Enter')loadLeads()">
+                <div class="autocomplete-wrapper" style="flex: 1; display: flex;">
+                    <input type="text" class="search-input" id="searchInput" style="width: 100%;" placeholder="Filter by name, phone, address..." autocomplete="off">
+                    <div id="searchInput_autocomplete" class="autocomplete-dropdown"></div>
+                </div>
                 <select class="select-input" id="freshnessFilter" onchange="loadLeads()">
                     <option value="">All freshness</option>
                     <option value="hour">Last hour</option>
@@ -640,6 +758,7 @@
                 <table>
                     <thead>
                         <tr>
+                            <th style="width: 40px; text-align: center;"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)"></th>
                             <th>Score</th>
                             <th>Business</th>
                             <th>Industry</th>
@@ -652,7 +771,7 @@
                     </thead>
                     <tbody id="leadsBody">
                         <tr>
-                            <td colspan="8">
+                            <td colspan="9">
                                 <div class="empty-state">
                                     <h3>Loading leads...</h3>
                                     <p>Initialising the workspace.</p>
@@ -672,11 +791,10 @@
         <div class="lineage-sidebar">
             <div>
                 <h2 style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Entity Audit Trail</h2>
-                <p style="font-size: 11px; color: var(--text-secondary);">Select a lead to inspect its raw attributes
-                    and data lineage.</p>
+                <p style="font-size: 11px; color: var(--text-secondary);">Select a lead to inspect its raw attributes and data lineage.</p>
             </div>
 
-            <!-- Sourcing Queue Monitor (Task Queue tracking) -->
+            <!-- Sourcing Queue Monitor -->
             <div class="lineage-card" id="campaignsCard">
                 <div class="lineage-title">Active Sourcing Queue</div>
                 <div id="campaignsRows">
@@ -705,14 +823,35 @@
                 <div class="lineage-title">Manual Overrides</div>
                 <label class="form-label">Corrected Legal Name</label>
                 <input type="text" class="form-control" id="overrideName" placeholder="Override parsed name...">
+
+                <label class="form-label" style="margin-top: 10px;">Corrected Website URL</label>
+                <input type="text" class="form-control" id="overrideWebsite" placeholder="Override website URL...">
+
+                <label class="form-label" style="margin-top: 10px;">Corrected Phone Number</label>
+                <input type="text" class="form-control" id="overridePhone" placeholder="Override phone number...">
+
                 <label class="form-label" style="margin-top: 10px;">Tags (comma-separated)</label>
                 <input type="text" class="form-control" id="overrideTags" placeholder="vip, contacted, rejected...">
-                <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveOverrides()">Save
-                    Corrections</button>
+
+                <button class="btn btn-primary" style="width: 100%; margin-top: 15px;" onclick="saveOverrides()">Save Corrections</button>
+
+                <!-- Contacts Outreach Toggle Button -->
+                <button class="btn" id="contactToggleBtn" style="width: 100%; margin-top: 8px;" onclick="toggleContactStatus()">Add to Contacts</button>
+
                 <button class="btn"
                     style="width: 100%; margin-top: 8px; background-color: rgba(251, 113, 133, 0.2); border-color: var(--accent-rose); color: #fb7185;"
                     onclick="blockSelectedLead()">Block Lead</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Custom Context Menu Container -->
+    <div id="customContextMenu" class="context-menu">
+        <div class="context-menu-item" onclick="handleContextOpen()">
+            <span style="font-size: 11px;">↗</span> Open Link
+        </div>
+        <div class="context-menu-item" onclick="handleContextCopy()">
+            <span style="font-size: 11px;">⧉</span> Copy Link
         </div>
     </div>
 
@@ -722,7 +861,10 @@
         const API = '/api/v2';
         let currentLeads = [];
         let selectedLeadId = null;
+        let activeLeadData = null;
         let currentOffset = 0;
+        let currentTab = 'all'; // 'all' or 'contacts'
+        let contextTargetUrl = '';
         const PAGE_SIZE = 50;
 
         // ---- Initialisation ----
@@ -731,6 +873,255 @@
             setInterval(loadStats, 15000);
             setInterval(pollCrawlerStatus, 10000);
             setInterval(pollCampaigns, 3000); // Poll campaigns queue every 3 seconds
+            
+            // Set up Autocomplete suggest panels on search inputs
+            setupAutocomplete('discoverQuery', 'discoverQuery_autocomplete');
+            setupAutocomplete('discoverWilaya', 'discoverWilaya_autocomplete');
+            setupAutocomplete('searchInput', 'searchInput_autocomplete');
+        }
+
+        // ---- Setup link hover/right-click actions ----
+        document.addEventListener('contextmenu', function (e) {
+            const anchor = e.target.closest('a[href]');
+            if (anchor) {
+                e.preventDefault();
+                contextTargetUrl = anchor.getAttribute('href');
+                showContextMenu(e.pageX, e.pageY);
+            } else {
+                hideContextMenu();
+            }
+        });
+
+        document.addEventListener('click', function (e) {
+            if (!e.target.closest('#customContextMenu')) {
+                hideContextMenu();
+            }
+        });
+
+        // Context Menu Overlay Position Calculation
+        function showContextMenu(x, y) {
+            const menu = document.getElementById('customContextMenu');
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.display = 'block';
+        }
+
+        function hideContextMenu() {
+            document.getElementById('customContextMenu').style.display = 'none';
+        }
+
+        function handleContextOpen() {
+            if (contextTargetUrl) {
+                window.open(contextTargetUrl, '_blank', 'noopener,noreferrer');
+            }
+            hideContextMenu();
+        }
+
+        async function handleContextCopy() {
+            if (contextTargetUrl) {
+                try {
+                    if (navigator.clipboard && window.isSecureContext) {
+                        await navigator.clipboard.writeText(contextTargetUrl);
+                    } else {
+                        const ta = document.createElement('textarea');
+                        ta.value = contextTargetUrl;
+                        ta.style.position = 'fixed';
+                        ta.style.opacity = '0';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                    }
+                    showToast('Link copied to clipboard!', 'success');
+                } catch (e) {
+                    showToast('Copy failed: ' + e.message, 'error');
+                }
+            }
+            hideContextMenu();
+        }
+
+        // ---- Setup Autocomplete Suggestions Box ----
+        function setupAutocomplete(inputId, dropdownId) {
+            const input = document.getElementById(inputId);
+            const dropdown = document.getElementById(dropdownId);
+            let timer;
+
+            input.addEventListener('input', function() {
+                clearTimeout(timer);
+                const val = input.value.trim();
+                if (val.length < 1) {
+                    dropdown.style.display = 'none';
+                    return;
+                }
+
+                timer = setTimeout(async () => {
+                    try {
+                        const r = await fetch(`${API}/search/autocomplete?q=${encodeURIComponent(val)}`);
+                        const data = await r.json();
+                        const suggestions = data.suggestions || [];
+                        if (suggestions.length > 0) {
+                            dropdown.innerHTML = suggestions.map(s => 
+                                `<div class="autocomplete-item" onclick="applySuggestion('${inputId}', '${dropdownId}', '${s.replace(/'/g, "\\'")}')">${escapeHtml(s)}</div>`
+                            ).join('');
+                            dropdown.style.display = 'block';
+                        } else {
+                            dropdown.style.display = 'none';
+                        }
+                    } catch (e) { console.error('Suggestions lookup failed', e); }
+                }, 50); // fast 50ms suggestion loading trigger
+            });
+
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest(`#${inputId}`) && !e.target.closest(`#${dropdownId}`)) {
+                    dropdown.style.display = 'none';
+                }
+            });
+        }
+
+        function applySuggestion(inputId, dropdownId, val) {
+            const input = document.getElementById(inputId);
+            input.value = val;
+            document.getElementById(dropdownId).style.display = 'none';
+            if (inputId === 'searchInput') {
+                currentOffset = 0;
+                loadLeads();
+            }
+        }
+
+        // Real-time table updates instantly as you type inside Search Input
+        let searchInputTimer;
+        document.getElementById('searchInput').addEventListener('input', function() {
+            clearTimeout(searchInputTimer);
+            searchInputTimer = setTimeout(() => {
+                currentOffset = 0;
+                loadLeads();
+            }, 120); // 120ms ultra fast update limit
+        });
+
+        // ---- Contacts and Switch Tab Controls ----
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('allLeadsTabBtn').className = tab === 'all' ? 'btn active' : 'btn';
+            document.getElementById('contactsTabBtn').className = tab === 'contacts' ? 'btn active' : 'btn';
+            
+            // Adjust bulk contact buttons
+            const bulkContactBtn = document.getElementById('bulkContactActionBtn');
+            if (tab === 'contacts') {
+                bulkContactBtn.textContent = 'Remove from Contacts';
+                bulkContactBtn.style.backgroundColor = 'var(--accent-rose)';
+                bulkContactBtn.style.borderColor = 'var(--accent-rose)';
+            } else {
+                bulkContactBtn.textContent = 'Add to Contacts';
+                bulkContactBtn.style.backgroundColor = 'var(--accent-glow)';
+                bulkContactBtn.style.borderColor = 'var(--accent-glow)';
+            }
+
+            currentOffset = 0; // Reset offset on switcher toggle
+            clearSelection();
+            loadLeads();
+        }
+
+        async function toggleContactStatus() {
+            if (!selectedLeadId || !activeLeadData) { showToast('Select a lead first', 'error'); return; }
+            const newStatus = !activeLeadData.is_contact;
+            try {
+                const r = await fetch(`${API}/leads/${selectedLeadId}/contact`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_contact: newStatus })
+                });
+                if (r.ok) {
+                    showToast(newStatus ? 'Added to Contacts' : 'Removed from Contacts', 'success');
+                    await selectLead(selectedLeadId);
+                    await loadLeads();
+                    await loadStats();
+                } else {
+                    showToast('Failed to modify contacts status', 'error');
+                }
+            } catch (e) { showToast('Contact toggle error: ' + e.message, 'error'); }
+        }
+
+        // ---- Multi-Select Actions Engine ----
+        function toggleSelectAll(master) {
+            const checkboxes = document.querySelectorAll('.row-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = master.checked;
+            });
+            updateBulkActionsBar();
+        }
+
+        function updateBulkActionsBar() {
+            const checked = document.querySelectorAll('.row-checkbox:checked');
+            const bar = document.getElementById('bulkActionBar');
+            const text = document.getElementById('bulkActionText');
+            
+            if (checked.length > 0) {
+                text.textContent = `${checked.length} items selected`;
+                bar.style.display = 'flex';
+            } else {
+                bar.style.display = 'none';
+                document.getElementById('selectAllCheckbox').checked = false;
+            }
+        }
+
+        function getSelectedLeadIds() {
+            const checked = document.querySelectorAll('.row-checkbox:checked');
+            const ids = [];
+            checked.forEach(cb => {
+                ids.push(parseInt(cb.value, 10));
+            });
+            return ids;
+        }
+
+        function clearSelection() {
+            const checkboxes = document.querySelectorAll('.row-checkbox');
+            checkboxes.forEach(cb => cb.checked = false);
+            document.getElementById('selectAllCheckbox').checked = false;
+            updateBulkActionsBar();
+        }
+
+        async function bulkAddToContacts() {
+            const ids = getSelectedLeadIds();
+            if (!ids.length) return;
+            const makeContact = (currentTab !== 'contacts');
+            
+            try {
+                const r = await fetch(`${API}/leads/bulk-contact`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lead_ids: ids, is_contact: makeContact })
+                });
+                if (r.ok) {
+                    showToast(`Updated contacts status for ${ids.length} items`, 'success');
+                    clearSelection();
+                    await loadLeads();
+                    await loadStats();
+                } else {
+                    showToast('Bulk update failed', 'error');
+                }
+            } catch (e) { showToast('Bulk action error: ' + e.message, 'error'); }
+        }
+
+        async function bulkBlockLeads() {
+            const ids = getSelectedLeadIds();
+            if (!ids.length) return;
+            if (!confirm(`Are you sure you want to block ${ids.length} selected leads?`)) return;
+
+            try {
+                const r = await fetch(`${API}/leads/bulk-status`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lead_ids: ids, status: 'rejected' })
+                });
+                if (r.ok) {
+                    showToast(`Blocked ${ids.length} leads successfully`, 'success');
+                    clearSelection();
+                    await loadLeads();
+                    await loadStats();
+                } else {
+                    showToast('Bulk blocking failed', 'error');
+                }
+            } catch (e) { showToast('Bulk action error: ' + e.message, 'error'); }
         }
 
         // ---- Stats ----
@@ -757,6 +1148,13 @@
             const freshness = document.getElementById('freshnessFilter').value;
             if (search) params.set('q', search);
             if (freshness) params.set('age_class', freshness);
+            
+            // Pass tab filters to enforce clean mutual exclusivity
+            if (currentTab === 'contacts') {
+                params.set('is_contact', 'true');
+            } else {
+                params.set('is_contact', 'false');
+            }
 
             try {
                 let url = API + '/leads?' + params.toString();
@@ -777,7 +1175,7 @@
         function renderLeads(leads) {
             const tbody = document.getElementById('leadsBody');
             if (!leads.length) {
-                tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><h3>No leads yet</h3><p>Use the discovery bar above to find businesses.</p></div></td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state"><h3>No leads yet</h3><p>Use the discovery bar above to find businesses.</p></div></td></tr>`;
                 return;
             }
             tbody.innerHTML = leads.map(l => {
@@ -787,6 +1185,7 @@
                 const freshClass = `freshness freshness-${fresh}`;
                 const statusBadge = statusToBadge(l.status);
                 return `<tr onclick="selectLead(${l.id})" class="${selectedLeadId === l.id ? 'selected' : ''}">
+            <td style="text-align: center;" onclick="event.stopPropagation();"><input type="checkbox" class="row-checkbox" value="${l.id}" onchange="updateBulkActionsBar()"></td>
             <td><span class="confidence">${score}</span></td>
             <td><strong>${escapeHtml(l.name)}</strong></td>
             <td>${escapeHtml(l.industry || '—')}</td>
@@ -821,7 +1220,22 @@
             try {
                 const r = await fetch(API + '/leads/' + id);
                 const lead = await r.json();
+                activeLeadData = lead; // Save populated instance cache
                 renderAudit(lead);
+                
+                // Adjust contacts toggle text and styles
+                const toggleBtn = document.getElementById('contactToggleBtn');
+                if (lead.is_contact) {
+                    toggleBtn.textContent = 'Remove from Contacts';
+                    toggleBtn.className = 'btn';
+                    toggleBtn.style.backgroundColor = 'var(--accent-rose)';
+                    toggleBtn.style.color = '#fff';
+                } else {
+                    toggleBtn.textContent = 'Add to Contacts';
+                    toggleBtn.className = 'btn btn-primary';
+                    toggleBtn.style.backgroundColor = 'var(--accent-glow)';
+                    toggleBtn.style.color = '#080a10';
+                }
             } catch (e) { showToast('Failed to load lead detail', 'error'); }
         }
 
@@ -834,12 +1248,14 @@
         <div class="metadata-row"><span class="metadata-label">Industry</span><span class="metadata-value">${escapeHtml(lead.industry || '—')}</span></div>
         <div class="metadata-row"><span class="metadata-label">Wilaya</span><span class="metadata-value">${escapeHtml(lead.wilaya || '—')}</span></div>
         <div class="metadata-row"><span class="metadata-label">Address</span><span class="metadata-value">${escapeHtml(lead.address || '—')}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Website</span><span class="metadata-value">${escapeHtml(lead.website || '—')}</span></div>
+        <div class="metadata-row"><span class="metadata-label">Website</span><span class="metadata-value">${lead.website ? `<a href="${lead.website}" class="app-link" target="_blank">${escapeHtml(lead.website)}</a>` : '—'}</span></div>
         <div class="metadata-row"><span class="metadata-label">Rating</span><span class="metadata-value">${lead.rating || 0} (${lead.review_count || 0} reviews)</span></div>
         <div class="metadata-row"><span class="metadata-label">Discovered</span><span class="metadata-value">${formatDate(lead.discovered_at)}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Source URL</span><span class="metadata-value">${escapeHtml(lead.source_url || '—')}</span></div>
+        <div class="metadata-row"><span class="metadata-label">Source URL</span><span class="metadata-value">${lead.source_url ? `<a href="${lead.source_url}" class="app-link" target="_blank">${escapeHtml(lead.source_url)}</a>` : '—'}</span></div>
     `;
             document.getElementById('overrideName').value = lead.name || '';
+            document.getElementById('overrideWebsite').value = lead.website || '';
+            document.getElementById('overridePhone').value = lead.phone || '';
             document.getElementById('overrideTags').value = (lead.tags || []).join(', ');
 
             // Contact channels
@@ -849,12 +1265,37 @@
                 contactCard.style.display = '';
                 let rows = '';
                 phones.forEach(p => {
-                    const val = p.e164 + (p.carrier ? ' (' + p.carrier + ')' : '');
-                    rows += `<div class="metadata-row"><span class="metadata-label">${p.phone_type || 'PHONE'}</span><span class="metadata-value">${escapeHtml(p.e164)} ${p.carrier ? '(' + escapeHtml(p.carrier) + ')' : ''}${copyBtn(p.e164)}</span></div>`;
+                    const waLink = `https://wa.me/${p.e164.replace(/[^\d]/g, '')}`;
+                    rows += `
+                        <div class="metadata-row">
+                            <span class="metadata-label">${p.phone_type || 'PHONE'}</span>
+                            <span class="metadata-value">
+                                <a href="tel:${p.e164}" class="app-link">${escapeHtml(p.e164)}</a>
+                                ${p.carrier ? '(' + escapeHtml(p.carrier) + ')' : ''}
+                                <a href="${waLink}" class="app-link" target="_blank" style="margin-left: 8px; color: var(--accent-emerald);">WhatsApp ↗</a>
+                                ${copyBtn(p.e164)}
+                            </span>
+                        </div>`;
                 });
-                if (lead.email) rows += `<div class="metadata-row"><span class="metadata-label">EMAIL</span><span class="metadata-value">${escapeHtml(lead.email)}${copyBtn(lead.email)}</span></div>`;
+                if (lead.email) {
+                    rows += `
+                        <div class="metadata-row">
+                            <span class="metadata-label">EMAIL</span>
+                            <span class="metadata-value">
+                                <a href="mailto:${lead.email}" class="app-link">${escapeHtml(lead.email)}</a>
+                                ${copyBtn(lead.email)}
+                            </span>
+                        </div>`;
+                }
                 (lead.social_media || []).forEach(s => {
-                    rows += `<div class="metadata-row"><span class="metadata-label">SOCIAL</span><span class="metadata-value">${escapeHtml(s)}${copyBtn(s)}</span></div>`;
+                    rows += `
+                        <div class="metadata-row">
+                            <span class="metadata-label">SOCIAL</span>
+                            <span class="metadata-value">
+                                <a href="${s}" class="app-link" target="_blank">${escapeHtml(s)}</a>
+                                ${copyBtn(s)}
+                            </span>
+                        </div>`;
                 });
                 document.getElementById('contactRows').innerHTML = rows;
             } else {
@@ -978,17 +1419,41 @@
             } catch (e) { showToast('Export failed: ' + e.message, 'error'); }
         }
 
+        // Fixed Save Corrections (Properly saves name, website, phone, and tags edits to database instantly)
         async function saveOverrides() {
-            if (!selectedLeadId) { showToast('Select a lead first', 'error'); return; }
+            if (!selectedLeadId || !activeLeadData) { showToast('Select a lead first', 'error'); return; }
+            const name = document.getElementById('overrideName').value.trim();
+            const website = document.getElementById('overrideWebsite').value.trim();
+            const phone = document.getElementById('overridePhone').value.trim();
             const tags = document.getElementById('overrideTags').value
                 .split(',').map(t => t.trim()).filter(Boolean);
+
+            if (!name) { showToast('Name cannot be empty', 'error'); return; }
+
             try {
-                await fetch(API + '/leads/' + selectedLeadId + '/tags', {
+                const payload = {
+                    name: name,
+                    tags: tags,
+                    address: activeLeadData.address,
+                    website: website || null,
+                    phone: phone || null,
+                    email: activeLeadData.email
+                };
+
+                const r = await fetch(`${API}/leads/${selectedLeadId}/edit`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tags }),
+                    body: JSON.stringify(payload),
                 });
-                showToast('Tags saved', 'success');
+
+                if (r.ok) {
+                    showToast('Changes saved successfully', 'success');
+                    await loadLeads(); // Instantly update view
+                    await selectLead(selectedLeadId); // Refresh details pane
+                    await loadStats();
+                } else {
+                    showToast('Failed to save corrections', 'error');
+                }
             } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
         }
 
@@ -1047,7 +1512,6 @@
             setTimeout(() => t.className = 'toast', 3500);
         }
 
-        // Centralised escaping helper protecting against XSS injections (Task 43)
         function escapeHtml(s) {
             if (s == null) return '';
             return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1061,10 +1525,6 @@
             } catch { return iso; }
         }
 
-        // ---- Copy-to-clipboard (Task 76) ----
-        // Returns an inline copy button HTML snippet for a given value.
-        // The button is invisible until the user hovers the metadata row,
-        // then turns green for 1.5s after a successful copy.
         function copyBtn(value) {
             if (!value) return '';
             const safe = value.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
@@ -1076,11 +1536,9 @@
             const btn = event.currentTarget;
             if (!btn) return;
             try {
-                // Prefer the modern async Clipboard API (requires HTTPS or localhost).
                 if (navigator.clipboard && window.isSecureContext) {
                     await navigator.clipboard.writeText(value);
                 } else {
-                    // Legacy fallback for non-secure contexts (e.g. plain HTTP).
                     const ta = document.createElement('textarea');
                     ta.value = value;
                     ta.style.position = 'fixed';

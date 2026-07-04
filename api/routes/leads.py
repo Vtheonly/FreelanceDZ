@@ -6,7 +6,8 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from rapidfuzz import process, fuzz
 
 from api.dependencies import get_analysis_service, get_lead_repo, get_scoring_service
 from core.interfaces import ILeadRepository
@@ -27,22 +28,47 @@ class StatusUpdate(BaseModel):
     status: str
 
 
+class LeadEditRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200, description="Corrected legal name override")
+    tags: list[str] = Field(default_factory=list, description="Associated custom classification tags")
+    address: Optional[str] = Field(None, description="Optional street address corrections")
+    website: Optional[str] = Field(None, description="Optional website URL corrections")
+    phone: Optional[str] = Field(None, description="Optional phone number corrections")
+    email: Optional[str] = Field(None, description="Optional contact email corrections")
+
+
+class ContactUpdateRequest(BaseModel):
+    is_contact: bool
+
+
+class BulkContactRequest(BaseModel):
+    lead_ids: list[int] = Field(..., min_length=1)
+    is_contact: bool
+
+
+class BulkStatusRequest(BaseModel):
+    lead_ids: list[int] = Field(..., min_length=1)
+    status: str
+
+
 @router.get("/leads")
 async def list_leads(
     wilaya: Optional[str] = Query(None),
     industry: Optional[str] = Query(None),
     age_class: Optional[FreshnessAge] = Query(None),
     min_score: float = Query(0.0, ge=0.0, le=100.0),
+    is_contact: Optional[bool] = Query(None),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     repo: ILeadRepository = Depends(get_lead_repo),
 ):
-    """List leads with optional filters. Supports pagination + freshness filter."""
+    """List leads with optional filters. Supports pagination, contacts-only filter, + freshness filter."""
     leads = await repo.list_leads(
         wilaya=wilaya,
         industry=industry,
         age_class=age_class,
         min_score=min_score,
+        is_contact=is_contact,
         limit=limit,
         offset=offset,
     )
@@ -68,11 +94,49 @@ async def get_lead(
 @router.get("/leads/search")
 async def search_leads(
     q: str = Query(..., min_length=1),
+    is_contact: Optional[bool] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     repo: ILeadRepository = Depends(get_lead_repo),
 ):
-    leads = await repo.search(term=q, limit=limit)
+    leads = await repo.search(term=q, is_contact=is_contact, limit=limit)
     return {"count": len(leads), "leads": [_lead_summary(l) for l in leads]}
+
+
+@router.get("/search/autocomplete")
+async def autocomplete(
+    q: str = Query("", min_length=1),
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Tokenize-indexed, prefix-prioritized, and typo-tolerant search suggestions."""
+    if not q or not q.strip():
+        return {"suggestions": []}
+
+    q_clean = q.strip().lower()
+    vocab = await repo.get_search_vocabulary()
+
+    # Prioritization 1: Prefix Matches
+    prefix_matches = [w for w in vocab if w.lower().startswith(q_clean)]
+
+    # Prioritization 2: Typo-Tolerant Fuzzy Matching
+    fuzzy_results = process.extract(
+        q_clean,
+        vocab,
+        scorer=fuzz.WRatio,
+        limit=15,
+        score_cutoff=55.0  # Cutoff tolerates 1-3 typos depending on length
+    )
+    fuzzy_matches = [r[0] for r in fuzzy_results]
+
+    # Combine prefix items first and eliminate duplicates
+    combined = []
+    seen = set()
+    for word in prefix_matches + fuzzy_matches:
+        word_lower = word.lower()
+        if word_lower not in seen:
+            seen.add(word_lower)
+            combined.append(word)
+
+    return {"suggestions": combined[:10]}
 
 
 @router.post("/leads/{lead_id}/tags")
@@ -86,6 +150,42 @@ async def update_tags(
         raise HTTPException(status_code=404, detail="Lead not found")
     await repo.set_tags(lead_id, body.tags)
     return {"ok": True, "id": lead_id, "tags": body.tags}
+
+
+@router.post("/leads/{lead_id}/edit")
+async def edit_lead(
+    lead_id: int,
+    body: LeadEditRequest,
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Edit core text fields, tags, and inline properties. Changes are immediately saved and apply to index."""
+    lead = await repo.get_lead(lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await repo.update_lead_details(
+        business_id=lead_id,
+        name=body.name,
+        tags=body.tags,
+        address=body.address,
+        website=body.website,
+        phone=body.phone,
+        email=body.email
+    )
+    return {"ok": True, "id": lead_id, "name": body.name, "tags": body.tags}
+
+
+@router.post("/leads/{lead_id}/contact")
+async def update_contact_status(
+    lead_id: int,
+    body: ContactUpdateRequest,
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Toggle a lead's inclusion in the Contacts/Outreach view tab."""
+    lead = await repo.get_lead(lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await repo.set_contact_status(lead_id, body.is_contact)
+    return {"ok": True, "id": lead_id, "is_contact": body.is_contact}
 
 
 @router.post("/leads/{lead_id}/status")
@@ -103,6 +203,30 @@ async def update_status(
         raise HTTPException(status_code=404, detail="Lead not found")
     await repo.set_status(lead_id, status)
     return {"ok": True, "id": lead_id, "status": status.value}
+
+
+@router.post("/leads/bulk-contact")
+async def bulk_contact(
+    body: BulkContactRequest,
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Add or remove multiple selected leads from Contacts in a single transaction."""
+    await repo.bulk_set_contact_status(body.lead_ids, body.is_contact)
+    return {"ok": True, "count": len(body.lead_ids)}
+
+
+@router.post("/leads/bulk-status")
+async def bulk_status(
+    body: BulkStatusRequest,
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Update workflow status of selected leads concurrently (e.g. Bulk blocking)."""
+    try:
+        status = LeadStatus(body.status)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {body.status}")
+    await repo.bulk_set_status(body.lead_ids, status)
+    return {"ok": True, "count": len(body.lead_ids)}
 
 
 @router.post("/leads/{lead_id}/analyze")
@@ -164,6 +288,7 @@ def _lead_summary(lead) -> dict:
         "priority_score": lead.priority_score,
         "status": lead.status.value,
         "tags": getattr(lead, "tags", []),
+        "is_contact": getattr(lead, "is_contact", False),
         "freshness": lead.business.freshness.calculated_age_class.value,
         "digital_presence_score": lead.analysis.digital_presence_score if lead.analysis else None,
         "discovered_at": lead.business.discovered_at.isoformat() if lead.business.discovered_at else None,
