@@ -503,8 +503,6 @@
             vertical-align: middle;
         }
 
-        @justify-content: center;
-
         @keyframes spin {
             to {
                 transform: rotate(360deg);
@@ -710,12 +708,13 @@
             border-radius: 4px;
             overflow: hidden;
             background-color: var(--bg-panel-2);
-            cursor: pointer;
-            transition: border-color 0.15s;
+            cursor: zoom-in;
+            transition: border-color 0.15s, transform 0.1s;
         }
 
         .attachment-thumb:hover {
             border-color: var(--accent-glow);
+            transform: scale(1.02);
         }
 
         .attachment-thumb img {
@@ -949,6 +948,7 @@
                                     id="selectAllCheckbox" onchange="toggleSelectAll(this)"></th>
                             <th id="th-priority_score" onclick="setSort('priority_score')">Score</th>
                             <th id="th-name" onclick="setSort('name')">Business</th>
+                            <th id="th-tags" onclick="setSort('tags')">Tags</th>
                             <th id="th-industry" onclick="setSort('industry')">Industry</th>
                             <th id="th-wilaya" onclick="setSort('wilaya')">Wilaya</th>
                             <th id="th-phone" onclick="setSort('phone')">Phone</th>
@@ -959,7 +959,7 @@
                     </thead>
                     <tbody id="leadsBody">
                         <tr>
-                            <td colspan="9">
+                            <td colspan="10">
                                 <div class="empty-state">
                                     <h3>Loading leads...</h3>
                                     <p>Initialising the workspace.</p>
@@ -1097,6 +1097,15 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Image Preview Lightbox Modal -->
+    <div class="modal" id="imagePreviewModal" onclick="closeImagePreview()" style="background: rgba(8, 10, 16, 0.95);">
+        <span class="modal-close"
+            style="position: absolute; top: 20px; right: 30px; font-size: 32px; color: white; cursor: pointer;">&times;</span>
+        <img id="imagePreviewContent" src=""
+            style="max-width: 90%; max-height: 90%; object-fit: contain; box-shadow: 0 10px 40px rgba(0,0,0,0.8); border: 1px solid var(--border-primary); border-radius: 6px;"
+            onclick="event.stopPropagation()">
     </div>
 
     <!-- Custom Context Menu Container -->
@@ -1305,7 +1314,7 @@
             searchInputTimer = setTimeout(() => {
                 currentOffset = 0;
                 loadLeads();
-            }, 120); // 120ms ultra fast update limit
+            }, 120);
         });
 
         // ---- Contacts and Switch Tab Controls ----
@@ -1474,7 +1483,7 @@
         }
 
         function updateSortHeaders() {
-            const headers = ['priority_score', 'name', 'industry', 'wilaya', 'phone', 'source', 'freshness', 'status'];
+            const headers = ['priority_score', 'name', 'tags', 'industry', 'wilaya', 'phone', 'source', 'freshness', 'status'];
             headers.forEach(h => {
                 const el = document.getElementById(`th-${h}`);
                 if (!el) return;
@@ -1527,7 +1536,7 @@
         function renderLeads(leads) {
             const tbody = document.getElementById('leadsBody');
             if (!leads.length) {
-                tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state"><h3>No leads yet</h3><p>Use the discovery bar above to find businesses.</p></div></td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state"><h3>No leads yet</h3><p>Use the discovery bar above to find businesses.</p></div></td></tr>`;
                 return;
             }
             tbody.innerHTML = leads.map(l => {
@@ -1542,10 +1551,8 @@
                 return `<tr onclick="selectLead(${l.id})" class="${selectedLeadId === l.id ? 'selected' : ''}">
                     <td style="text-align: center;" onclick="event.stopPropagation();"><input type="checkbox" class="row-checkbox" value="${l.id}" onchange="updateBulkActionsBar()"></td>
                     <td><span class="confidence">${score}</span></td>
-                    <td>
-                        <strong>${escapeHtml(l.name)}</strong>
-                        <div style="margin-top: 2px; display: flex; flex-wrap: wrap;">${tagBadges}</div>
-                    </td>
+                    <td><strong>${escapeHtml(l.name)}</strong></td>
+                    <td><div style="display: flex; flex-wrap: wrap;">${tagBadges ? tagBadges : '—'}</div></td>
                     <td>${escapeHtml(l.industry || '—')}</td>
                     <td>${escapeHtml(l.wilaya || '—')}</td>
                     <td style="font-family: var(--font-mono); font-size: 11px;">${escapeHtml(phone)}</td>
@@ -1774,7 +1781,7 @@
                     const isImg = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'].includes(f.mime_type.toLowerCase());
                     const downloadUrl = `${API}/attachments/${f.id}`;
                     if (isImg) {
-                        return `<div class="attachment-thumb" title="${escapeHtml(f.filename)}" onclick="window.open('${downloadUrl}', '_blank')">
+                        return `<div class="attachment-thumb" title="${escapeHtml(f.filename)}" onclick="previewImage('${downloadUrl}')">
                             <button class="delete-btn" onclick="deleteAttachment(event, ${f.id})" title="Delete Attachment">&times;</button>
                             <img src="${downloadUrl}" alt="Attachment">
                         </div>`;
@@ -1806,6 +1813,17 @@
             } catch (e) {
                 showToast('Delete error: ' + e.message, 'error');
             }
+        }
+
+        // ---- Image Preview Lightbox ----
+        function previewImage(url) {
+            document.getElementById('imagePreviewContent').src = url;
+            document.getElementById('imagePreviewModal').style.display = 'flex';
+        }
+
+        function closeImagePreview() {
+            document.getElementById('imagePreviewModal').style.display = 'none';
+            document.getElementById('imagePreviewContent').src = '';
         }
 
         // ---- Add Manual Lead Modal Handlers ----
