@@ -356,3 +356,20 @@ def _migration_6_contacts(conn: sqlite3.Connection) -> None:
     columns = [row["name"] for row in cursor.fetchall()]
     if "is_contact" not in columns:
         conn.execute("ALTER TABLE lead_scores ADD COLUMN is_contact INTEGER DEFAULT 0;")
+
+
+@migration(7, "Add lead_attachments table for persistent images/files and file cache")
+def _migration_7_attachments(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS lead_attachments (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_record_id  INTEGER NOT NULL REFERENCES raw_records (id) ON DELETE CASCADE,
+            filename       TEXT NOT NULL,
+            mime_type      TEXT NOT NULL,
+            file_path      TEXT NOT NULL,
+            created_at     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lead_attachments_record ON lead_attachments (raw_record_id);
+        """
+    )

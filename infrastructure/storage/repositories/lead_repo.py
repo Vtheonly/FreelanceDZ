@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -218,6 +219,127 @@ class LeadRepository(ILeadRepository):
         await asyncio.to_thread(_execute)
         _logger.info("Successfully completed bulk status update for %d records", len(business_ids))
 
+    async def get_all_tags(self) -> list[str]:
+        def _execute():
+            with self._db.connection() as conn:
+                rows = conn.execute("SELECT tags FROM lead_scores WHERE tags IS NOT NULL AND tags != '[]'").fetchall()
+                all_tags = set()
+                for r in rows:
+                    try:
+                        for t in json.loads(r["tags"]):
+                            if t and t.strip():
+                                all_tags.add(t.strip())
+                    except Exception:
+                        pass
+                return sorted(list(all_tags))
+        return await asyncio.to_thread(_execute)
+
+    async def create_manual_lead(self, business: BusinessRaw, tags: list[str]) -> int:
+        fp = business.fingerprint()
+        phone_meta_json = json.dumps(
+            [p.model_dump(mode="json") for p in business.phone_metadata],
+            ensure_ascii=False,
+        )
+        social_json = json.dumps(business.social_media_handles, ensure_ascii=False)
+        now = _now_iso()
+        discovered_at = business.freshness.discovered_at.isoformat()
+        last_updated = (
+            business.freshness.last_updated.isoformat()
+            if business.freshness.last_updated
+            else None
+        )
+        age_class = business.freshness.calculated_age_class.value
+        tags_json = json.dumps(tags, ensure_ascii=False)
+
+        def _execute():
+            with self._db.connection() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO raw_records (
+                        fingerprint, name, industry, wilaya, address, website,
+                        phone, email, social_media_handles, rating, review_count,
+                        latitude, longitude, source, source_url, phone_metadata,
+                        raw_html_hash, discovered_at, last_updated, relative_age_hint,
+                        calculated_age_class, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(fingerprint) DO UPDATE SET
+                        address              = COALESCE(address, excluded.address),
+                        website              = COALESCE(website, excluded.website),
+                        phone                = COALESCE(phone, excluded.phone),
+                        email                = COALESCE(email, excluded.email)
+                    """,
+                    (
+                        fp, business.name, business.industry, business.wilaya,
+                        business.address, business.website, business.phone, business.email,
+                        social_json, business.rating, business.review_count,
+                        business.latitude, business.longitude,
+                        business.source.value, business.source_url, phone_meta_json,
+                        business.raw_html_hash, discovered_at, last_updated,
+                        business.freshness.relative_age_hint, age_class, now,
+                    ),
+                )
+                row_id = cursor.lastrowid
+                if not row_id:
+                    row = conn.execute(
+                        "SELECT id FROM raw_records WHERE fingerprint = ?", (fp,)
+                    ).fetchone()
+                    row_id = row["id"] if row else None
+
+                if row_id is not None:
+                    conn.execute(
+                        """
+                        INSERT INTO lead_scores (raw_record_id, priority_score, status, tags, computed_at)
+                        VALUES (?, 0.0, ?, ?, ?)
+                        ON CONFLICT(raw_record_id) DO UPDATE SET tags = excluded.tags
+                        """,
+                        (row_id, LeadStatus.VERIFIED.value, tags_json, now),
+                    )
+                return row_id
+        return await asyncio.to_thread(_execute)
+
+    async def add_attachment(self, raw_record_id: int, filename: str, mime_type: str, file_path: str) -> int:
+        now = _now_iso()
+        def _execute():
+            with self._db.connection() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO lead_attachments (raw_record_id, filename, mime_type, file_path, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (raw_record_id, filename, mime_type, file_path, now),
+                )
+                return cursor.lastrowid
+        return await asyncio.to_thread(_execute)
+
+    async def get_attachments(self, raw_record_id: int) -> list[dict]:
+        def _execute():
+            with self._db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT id, filename, mime_type, created_at FROM lead_attachments WHERE raw_record_id = ? ORDER BY created_at DESC",
+                    (raw_record_id,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+        return await asyncio.to_thread(_execute)
+
+    async def delete_attachment(self, attachment_id: int) -> bool:
+        def _get_and_delete():
+            with self._db.connection() as conn:
+                row = conn.execute(
+                    "SELECT file_path FROM lead_attachments WHERE id = ?",
+                    (attachment_id,)
+                ).fetchone()
+                if not row:
+                    return False
+                file_path = row["file_path"]
+                conn.execute("DELETE FROM lead_attachments WHERE id = ?", (attachment_id,))
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception as exc:
+                    _logger.warning("Could not delete physical attachment file: %s", exc)
+                return True
+        return await asyncio.to_thread(_get_and_delete)
+
     # ------------------------------------------------------------------
     #  Reads
     # ------------------------------------------------------------------
@@ -237,6 +359,9 @@ class LeadRepository(ILeadRepository):
         age_class: Optional[FreshnessAge] = None,
         min_score: float = 0.0,
         is_contact: Optional[bool] = None,
+        tag: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "desc",
         limit: int = 100,
         offset: int = 0,
     ) -> list[Lead]:
@@ -257,12 +382,36 @@ class LeadRepository(ILeadRepository):
         if is_contact is not None:
             clauses.append("COALESCE(s.is_contact, 0) = ?")
             params.append(1 if is_contact else 0)
+        if tag:
+            clauses.append("EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(COALESCE(s.tags, '[]')) THEN s.tags ELSE '[]' END) WHERE LOWER(value) = LOWER(?))")
+            params.append(tag)
+
+        # Build dynamic column sorting safely
+        sort_col = "COALESCE(s.priority_score, 0.0)"
+        if sort_by == "name":
+            sort_col = "r.name"
+        elif sort_by == "industry":
+            sort_col = "r.industry"
+        elif sort_by == "wilaya":
+            sort_col = "r.wilaya"
+        elif sort_by == "phone":
+            sort_col = "r.phone"
+        elif sort_by == "source":
+            sort_col = "r.source"
+        elif sort_by == "freshness":
+            sort_col = "r.calculated_age_class"
+        elif sort_by == "status":
+            sort_col = "COALESCE(s.status, 'discovered')"
+        elif sort_by == "tags":
+            sort_col = "s.tags"
+
+        direction = "DESC" if sort_order.lower() == "desc" else "ASC"
 
         where = " WHERE " + " AND ".join(clauses)
         sql = (
             self._base_query()
             + where
-            + " ORDER BY COALESCE(s.priority_score, 0.0) DESC, r.created_at DESC LIMIT ? OFFSET ?"
+            + f" ORDER BY {sort_col} {direction}, r.created_at DESC LIMIT ? OFFSET ?"
         )
         params.extend([limit, offset])
 
@@ -309,48 +458,14 @@ class LeadRepository(ILeadRepository):
     async def stats(self) -> dict[str, Any]:
         def _execute():
             with self._db.connection() as conn:
-                total = conn.execute("SELECT COUNT(*) FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected'").fetchone()[0]
-                analyzed = conn.execute("SELECT COUNT(*) FROM analyses a LEFT JOIN lead_scores s ON s.raw_record_id = a.raw_record_id WHERE COALESCE(s.status, 'discovered') != 'rejected'").fetchone()[0]
-                scored = conn.execute(
-                    "SELECT COUNT(*) FROM lead_scores WHERE priority_score > 0 AND status != 'rejected'"
-                ).fetchone()[0]
-                avg_score = conn.execute(
-                    "SELECT AVG(priority_score) FROM lead_scores WHERE status != 'rejected'"
-                ).fetchone()[0] or 0.0
-                top_wilayas = [
-                    {"wilaya": r[0], "count": r[1]}
-                    for r in conn.execute(
-                        "SELECT wilaya, COUNT(*) c FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected' GROUP BY wilaya ORDER BY c DESC LIMIT 10"
-                    ).fetchall()
-                ]
-                top_industries = [
-                    {"industry": r[0], "count": r[1]}
-                    for r in conn.execute(
-                        "SELECT industry, COUNT(*) c FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected' GROUP BY industry ORDER BY c DESC LIMIT 10"
-                    ).fetchall()
-                ]
-                sources = [
-                    {"source": r[0], "count": r[1]}
-                    for r in conn.execute(
-                        "SELECT source, COUNT(*) c FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected' GROUP BY source ORDER BY c DESC"
-                    ).fetchall()
-                ]
-                age_breakdown = [
-                    {"age_class": r[0], "count": r[1]}
-                    for r in conn.execute(
-                        "SELECT calculated_age_class, COUNT(*) c FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, 'discovered') != 'rejected' GROUP BY calculated_age_class ORDER BY c DESC"
-                    ).fetchall()
-                ]
+                total_active = conn.execute("SELECT COUNT(*) FROM raw_records r LEFT JOIN lead_scores s ON s.raw_record_id = r.id WHERE COALESCE(s.status, '') != 'rejected'").fetchone()[0]
+                analyzed = conn.execute("SELECT COUNT(*) FROM analyses").fetchone()[0]
+                avg_score = conn.execute("SELECT AVG(priority_score) FROM lead_scores WHERE status != 'rejected'").fetchone()[0] or 0.0
                 return {
-                    "total_leads": total,
+                    "total_leads": total_active,
                     "analyzed_leads": analyzed,
-                    "scored_leads": scored,
-                    "unanalyzed_leads": total - analyzed,
-                    "average_score": round(avg_score, 2),
-                    "top_wilayas": top_wilayas,
-                    "top_industries": top_industries,
-                    "sources": sources,
-                    "age_breakdown": age_breakdown,
+                    "average_score": avg_score,
+                    "age_breakdown": []
                 }
         return await asyncio.to_thread(_execute)
 
@@ -371,7 +486,6 @@ class LeadRepository(ILeadRepository):
                 for row in rows:
                     for field in row:
                         if field:
-                            # Tokenize and retain letters, numbers, hyphens, and apostrophes
                             tokens = re.findall(r"\b[\w\-']+\b", str(field), re.UNICODE)
                             for t in tokens:
                                 if len(t) >= 2:
@@ -384,24 +498,23 @@ class LeadRepository(ILeadRepository):
         return vocab
 
     # ------------------------------------------------------------------
-    #  Internals
+    #  Serialisation helper mapping
     # ------------------------------------------------------------------
 
     def _base_query(self) -> str:
         return """
-            SELECT
-                r.id, r.fingerprint, r.name, r.industry, r.wilaya, r.address,
-                r.website, r.phone, r.email, r.social_media_handles, r.rating,
-                r.review_count, r.latitude, r.longitude, r.source, r.source_url,
-                r.phone_metadata, r.discovered_at, r.last_updated,
-                r.relative_age_hint, r.calculated_age_class, r.created_at,
-                a.pain_points, a.recommended_solutions, a.digital_presence_score,
-                a.pitch_angles, a.estimated_monthly_revenue_usd, a.analysis_model,
-                a.from_cache, a.analyzed_at,
-                s.priority_score, s.score_breakdown, s.status, s.tags, s.computed_at,
-                COALESCE(s.is_contact, 0) AS is_contact
+            SELECT r.id, r.fingerprint, r.name, r.industry, r.wilaya, r.address, r.website,
+                   r.phone, r.email, r.social_media_handles, r.rating, r.review_count,
+                   r.latitude, r.longitude, r.source, r.source_url, r.phone_metadata,
+                   r.discovered_at, r.last_updated, r.relative_age_hint, r.calculated_age_class,
+                   r.created_at,
+                   a.pain_points, a.recommended_solutions, a.digital_presence_score,
+                   a.pitch_angles, a.estimated_monthly_revenue_usd, a.analysis_model,
+                   a.from_cache, a.analyzed_at,
+                   s.priority_score, s.score_breakdown, s.status, s.tags, s.computed_at,
+                   COALESCE(s.is_contact, 0) AS is_contact
             FROM raw_records r
-            LEFT JOIN analyses  a ON a.raw_record_id = r.id
+            LEFT JOIN analyses a ON a.raw_record_id = r.id
             LEFT JOIN lead_scores s ON s.raw_record_id = r.id
         """
 

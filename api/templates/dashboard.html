@@ -12,11 +12,11 @@
         rel="stylesheet">
     <style>
         :root {
-            --bg-workspace: #080a10;
+            --bg-base: #080a10;
             --bg-panel: #111420;
-            --bg-panel-2: #0c0f17;
-            --border-primary: #1e2538;
-            --border-secondary: #2a3354;
+            --bg-panel-2: #161b2c;
+            --border-primary: #1f253d;
+            --border-secondary: #2d365e;
             --accent-glow: #38bdf8;
             --accent-emerald: #34d399;
             --accent-amber: #fbbf24;
@@ -36,7 +36,7 @@
 
         body {
             font-family: var(--font-jakarta);
-            background-color: var(--bg-workspace);
+            background-color: var(--bg-base);
             color: var(--text-primary);
             height: 100vh;
             min-height: 100vh;
@@ -263,6 +263,23 @@
             position: sticky;
             top: 0;
             z-index: 1;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        th:hover {
+            color: var(--accent-glow);
+            background-color: #1e253d;
+        }
+
+        th.sorted-desc::after {
+            content: " ▼";
+            font-size: 8px;
+        }
+
+        th.sorted-asc::after {
+            content: " ▲";
+            font-size: 8px;
         }
 
         td {
@@ -318,6 +335,18 @@
         .badge-info {
             background: rgba(56, 189, 248, 0.12);
             color: var(--accent-glow);
+        }
+
+        .badge-tag {
+            background: rgba(248, 250, 252, 0.08);
+            border: 1px solid rgba(248, 250, 252, 0.15);
+            color: var(--text-secondary);
+            text-transform: lowercase;
+            padding: 1px 6px;
+            font-size: 9px;
+            border-radius: 3px;
+            margin-right: 4px;
+            margin-top: 3px;
         }
 
         .freshness {
@@ -474,6 +503,8 @@
             vertical-align: middle;
         }
 
+        @justify-content: center;
+
         @keyframes spin {
             to {
                 transform: rotate(360deg);
@@ -577,12 +608,12 @@
             flex-shrink: 0;
         }
 
-        /* Autocomplete suggestions wrapper */
         .autocomplete-wrapper {
             position: relative;
             display: inline-block;
             width: 100%;
         }
+
         .autocomplete-dropdown {
             position: absolute;
             top: 100%;
@@ -598,6 +629,7 @@
             margin-top: 4px;
             display: none;
         }
+
         .autocomplete-item {
             padding: 8px 12px;
             font-size: 13px;
@@ -605,12 +637,12 @@
             cursor: pointer;
             transition: background-color 0.1s;
         }
+
         .autocomplete-item:hover {
             background-color: #1e2a4a;
             color: var(--accent-glow);
         }
 
-        /* Custom Hover Link Actions Context Menu Styles */
         .context-menu {
             position: absolute;
             background-color: var(--bg-panel);
@@ -622,6 +654,7 @@
             min-width: 140px;
             padding: 4px 0;
         }
+
         .context-menu-item {
             padding: 8px 12px;
             font-size: 12px;
@@ -632,12 +665,12 @@
             gap: 8px;
             transition: background-color 0.15s;
         }
+
         .context-menu-item:hover {
             background-color: #1e2a4a;
             color: var(--accent-glow);
         }
 
-        /* Contacts UI Tab Bar Styles */
         .tabs-bar {
             display: flex;
             gap: 8px;
@@ -645,6 +678,7 @@
             border-bottom: 1px solid var(--border-primary);
             padding-bottom: 8px;
         }
+
         .tabs-bar .btn {
             background: transparent;
             border: none;
@@ -654,9 +688,149 @@
             font-weight: 600;
             color: var(--text-secondary);
         }
+
         .tabs-bar .btn.active {
             color: var(--accent-glow);
             border-bottom: 2px solid var(--accent-glow);
+        }
+
+        /* Attachments Board Layout */
+        .attachments-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(75px, 1fr));
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .attachment-thumb {
+            position: relative;
+            width: 75px;
+            height: 75px;
+            border: 1px solid var(--border-primary);
+            border-radius: 4px;
+            overflow: hidden;
+            background-color: var(--bg-panel-2);
+            cursor: pointer;
+            transition: border-color 0.15s;
+        }
+
+        .attachment-thumb:hover {
+            border-color: var(--accent-glow);
+        }
+
+        .attachment-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .attachment-thumb .delete-btn {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            background: rgba(251, 113, 133, 0.9);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            font-size: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s;
+            line-height: 1;
+            z-index: 2;
+        }
+
+        .attachment-thumb:hover .delete-btn {
+            opacity: 1;
+        }
+
+        .attachment-dropzone {
+            border: 1.5px dashed var(--border-primary);
+            border-radius: 6px;
+            padding: 10px;
+            text-align: center;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+            margin-top: 8px;
+            user-select: none;
+        }
+
+        .attachment-dropzone:hover,
+        .attachment-dropzone.dragover {
+            border-color: var(--accent-glow);
+            color: var(--text-primary);
+            background: rgba(56, 189, 248, 0.05);
+        }
+
+        /* Modal Overlay Windows */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(8, 10, 16, 0.85);
+            backdrop-filter: blur(4px);
+            z-index: 10002;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-secondary);
+            border-radius: 12px;
+            width: 520px;
+            max-width: 95%;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            position: relative;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .modal-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 18px;
+        }
+
+        .modal-close:hover {
+            color: var(--accent-rose);
+        }
+
+        /* Inline tags suggestion container */
+        .tags-suggest-container {
+            position: relative;
+            width: 100%;
+        }
+
+        .tag-pill-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
         }
     </style>
 </head>
@@ -673,6 +847,7 @@
             </div>
         </div>
         <div class="actions">
+            <button class="btn btn-primary" onclick="openAddLeadModal()">Add New Lead</button>
             <button class="btn" onclick="runResolution()">Resolve Entities</button>
             <button class="btn" onclick="scoreAll()">Rescore Leads</button>
             <button class="btn btn-success" onclick="exportLeads()">Export CSV</button>
@@ -719,29 +894,41 @@
                     <div id="discoverQuery_autocomplete" class="autocomplete-dropdown"></div>
                 </div>
                 <div class="autocomplete-wrapper">
-                    <input type="text" class="search-input" id="discoverWilaya" style="width: 100%;" placeholder="Wilaya (optional)" autocomplete="off">
+                    <input type="text" class="search-input" id="discoverWilaya" style="width: 100%;"
+                        placeholder="Wilaya (optional)" autocomplete="off">
                     <div id="discoverWilaya_autocomplete" class="autocomplete-dropdown"></div>
                 </div>
-                <input type="number" class="search-input" id="discoverLimit" value="30" min="1" max="200" placeholder="Limit" style="width: 80px;">
+                <input type="number" class="search-input" id="discoverLimit" value="30" min="1" max="200"
+                    placeholder="Limit" style="width: 80px;">
                 <button class="btn btn-primary" id="discoverBtn" onclick="runDiscovery()">Discover</button>
             </div>
 
             <!-- Bulk actions toolbar -->
-            <div id="bulkActionBar" class="toolbar" style="display: none; background-color: #1a2236; border: 1px solid var(--border-secondary); padding: 8px 16px; border-radius: 6px; margin-bottom: 16px; align-items: center; justify-content: space-between;">
-                <span id="bulkActionText" style="font-size: 13px; font-weight: 600; color: var(--accent-glow);">0 items selected</span>
+            <div id="bulkActionBar" class="toolbar"
+                style="display: none; background-color: #1a2236; border: 1px solid var(--border-secondary); padding: 8px 16px; border-radius: 6px; margin-bottom: 16px; align-items: center; justify-content: space-between;">
+                <span id="bulkActionText" style="font-size: 13px; font-weight: 600; color: var(--accent-glow);">0 items
+                    selected</span>
                 <div style="display: flex; gap: 8px;">
-                    <button class="btn btn-primary" id="bulkContactActionBtn" onclick="bulkAddToContacts()">Add to Contacts</button>
-                    <button class="btn" style="background-color: rgba(251, 113, 133, 0.2); border-color: var(--accent-rose); color: #fb7185;" onclick="bulkBlockLeads()">Block Selected</button>
+                    <button class="btn btn-primary" id="bulkContactActionBtn" onclick="bulkAddToContacts()">Add to
+                        Contacts</button>
+                    <button class="btn"
+                        style="background-color: rgba(251, 113, 133, 0.2); border-color: var(--accent-rose); color: #fb7185;"
+                        onclick="bulkBlockLeads()">Block Selected</button>
                     <button class="btn" onclick="clearSelection()">Cancel</button>
                 </div>
             </div>
 
             <div class="toolbar">
                 <div class="autocomplete-wrapper" style="flex: 1; display: flex;">
-                    <input type="text" class="search-input" id="searchInput" style="width: 100%;" placeholder="Filter by name, phone, address..." autocomplete="off">
+                    <input type="text" class="search-input" id="searchInput" style="width: 100%;"
+                        placeholder="Filter by name, phone, address..." autocomplete="off">
                     <div id="searchInput_autocomplete" class="autocomplete-dropdown"></div>
                 </div>
-                <select class="select-input" id="freshnessFilter" onchange="loadLeads()">
+                <select class="select-input" id="tagFilter" onchange="currentOffset = 0; loadLeads();"
+                    style="max-width: 160px;">
+                    <option value="">All tags</option>
+                </select>
+                <select class="select-input" id="freshnessFilter" onchange="loadLeads()" style="max-width: 140px;">
                     <option value="">All freshness</option>
                     <option value="hour">Last hour</option>
                     <option value="day">Last 24h</option>
@@ -758,15 +945,16 @@
                 <table>
                     <thead>
                         <tr>
-                            <th style="width: 40px; text-align: center;"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)"></th>
-                            <th>Score</th>
-                            <th>Business</th>
-                            <th>Industry</th>
-                            <th>Wilaya</th>
-                            <th>Phone</th>
-                            <th>Source</th>
-                            <th>Freshness</th>
-                            <th>Status</th>
+                            <th style="width: 40px; text-align: center; cursor: default;"><input type="checkbox"
+                                    id="selectAllCheckbox" onchange="toggleSelectAll(this)"></th>
+                            <th id="th-priority_score" onclick="setSort('priority_score')">Score</th>
+                            <th id="th-name" onclick="setSort('name')">Business</th>
+                            <th id="th-industry" onclick="setSort('industry')">Industry</th>
+                            <th id="th-wilaya" onclick="setSort('wilaya')">Wilaya</th>
+                            <th id="th-phone" onclick="setSort('phone')">Phone</th>
+                            <th id="th-source" onclick="setSort('source')">Source</th>
+                            <th id="th-freshness" onclick="setSort('freshness')">Freshness</th>
+                            <th id="th-status" onclick="setSort('status')">Status</th>
                         </tr>
                     </thead>
                     <tbody id="leadsBody">
@@ -788,10 +976,11 @@
         </div>
 
         <!-- Audit & Lineage Sidebar -->
-        <div class="lineage-sidebar">
+        <div class="lineage-sidebar" id="lineageSidebar">
             <div>
                 <h2 style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Entity Audit Trail</h2>
-                <p style="font-size: 11px; color: var(--text-secondary);">Select a lead to inspect its raw attributes and data lineage.</p>
+                <p style="font-size: 11px; color: var(--text-secondary);">Select a lead to inspect its raw attributes,
+                    files, and data lineage.</p>
             </div>
 
             <!-- Sourcing Queue Monitor -->
@@ -802,11 +991,24 @@
                 </div>
             </div>
 
+            <!-- Lead Details Card -->
             <div class="lineage-card" id="auditCard">
                 <div class="lineage-title">Lead Details</div>
                 <div class="empty-state" style="padding: 20px;">
                     <p>No lead selected.</p>
                 </div>
+            </div>
+
+            <!-- Persistent Attachments Card -->
+            <div class="lineage-card" id="attachmentsCard" style="display: none;">
+                <div class="lineage-title">Attachments & Screenshots</div>
+                <div class="attachment-dropzone" id="attachmentDropZone" ondragover="dragOverDropZone(event)"
+                    ondragleave="dragLeaveDropZone(event)" ondrop="handleFileDrop(event)">
+                    Paste screenshots here (Ctrl+V) or click to browse files
+                    <input type="file" id="attachmentFileInput" multiple style="display: none;"
+                        onchange="handleFileSelect(this)">
+                </div>
+                <div class="attachments-grid" id="attachmentsList"></div>
             </div>
 
             <div class="lineage-card" id="contactCard" style="display: none;">
@@ -819,6 +1021,7 @@
                 <div id="analysisRows"></div>
             </div>
 
+            <!-- Manual Overrides Card -->
             <div class="lineage-card">
                 <div class="lineage-title">Manual Overrides</div>
                 <label class="form-label">Corrected Legal Name</label>
@@ -831,16 +1034,67 @@
                 <input type="text" class="form-control" id="overridePhone" placeholder="Override phone number...">
 
                 <label class="form-label" style="margin-top: 10px;">Tags (comma-separated)</label>
-                <input type="text" class="form-control" id="overrideTags" placeholder="vip, contacted, rejected...">
+                <div class="tags-suggest-container">
+                    <input type="text" class="form-control" id="overrideTags" placeholder="vip, contacted, rejected..."
+                        autocomplete="off">
+                    <div id="overrideTags_autocomplete" class="autocomplete-dropdown"></div>
+                </div>
 
-                <button class="btn btn-primary" style="width: 100%; margin-top: 15px;" onclick="saveOverrides()">Save Corrections</button>
+                <button class="btn btn-primary" style="width: 100%; margin-top: 15px;" onclick="saveOverrides()">Save
+                    Corrections</button>
 
                 <!-- Contacts Outreach Toggle Button -->
-                <button class="btn" id="contactToggleBtn" style="width: 100%; margin-top: 8px;" onclick="toggleContactStatus()">Add to Contacts</button>
+                <button class="btn" id="contactToggleBtn" style="width: 100%; margin-top: 8px;"
+                    onclick="toggleContactStatus()">Add to Contacts</button>
 
                 <button class="btn"
                     style="width: 100%; margin-top: 8px; background-color: rgba(251, 113, 133, 0.2); border-color: var(--accent-rose); color: #fb7185;"
                     onclick="blockSelectedLead()">Block Lead</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manual New Lead Modal -->
+    <div class="modal" id="addLeadModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Create New Lead Manually</h3>
+                <button class="modal-close" onclick="closeAddLeadModal()">&times;</button>
+            </div>
+            <div>
+                <label class="form-label">Business Name *</label>
+                <input type="text" class="form-control" id="manualName" required>
+
+                <label class="form-label" style="margin-top: 10px;">Industry / Category *</label>
+                <input type="text" class="form-control" id="manualIndustry" placeholder="e.g. pharmacie, menuiserie"
+                    required>
+
+                <label class="form-label" style="margin-top: 10px;">Wilaya *</label>
+                <input type="text" class="form-control" id="manualWilaya" placeholder="e.g. Oran, Alger" required>
+
+                <label class="form-label" style="margin-top: 10px;">Street Address</label>
+                <input type="text" class="form-control" id="manualAddress">
+
+                <label class="form-label" style="margin-top: 10px;">Website URL</label>
+                <input type="text" class="form-control" id="manualWebsite">
+
+                <label class="form-label" style="margin-top: 10px;">Phone Number</label>
+                <input type="text" class="form-control" id="manualPhone">
+
+                <label class="form-label" style="margin-top: 10px;">Email Address</label>
+                <input type="text" class="form-control" id="manualEmail">
+
+                <label class="form-label" style="margin-top: 10px;">Initial Tags (comma-separated)</label>
+                <div class="tags-suggest-container">
+                    <input type="text" class="form-control" id="manualTags" placeholder="vip, retail..."
+                        autocomplete="off">
+                    <div id="manualTags_autocomplete" class="autocomplete-dropdown"></div>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end;">
+                    <button class="btn" onclick="closeAddLeadModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="submitManualLead()">Create Lead</button>
+                </div>
             </div>
         </div>
     </div>
@@ -867,17 +1121,31 @@
         let contextTargetUrl = '';
         const PAGE_SIZE = 50;
 
+        // Sorting State
+        let currentSortBy = 'priority_score';
+        let currentSortOrder = 'desc';
+
+        // Known tags list
+        let existingTags = [];
+
         // ---- Initialisation ----
         async function init() {
-            await Promise.all([loadStats(), loadLeads(), pollCrawlerStatus(), pollCampaigns()]);
+            await Promise.all([loadStats(), loadTags(), loadLeads(), pollCrawlerStatus(), pollCampaigns()]);
             setInterval(loadStats, 15000);
             setInterval(pollCrawlerStatus, 10000);
-            setInterval(pollCampaigns, 3000); // Poll campaigns queue every 3 seconds
-            
+            setInterval(pollCampaigns, 3000);
+
             // Set up Autocomplete suggest panels on search inputs
             setupAutocomplete('discoverQuery', 'discoverQuery_autocomplete');
             setupAutocomplete('discoverWilaya', 'discoverWilaya_autocomplete');
             setupAutocomplete('searchInput', 'searchInput_autocomplete');
+
+            // Setup Tag inputs autocompletion
+            setupTagAutocomplete('overrideTags', 'overrideTags_autocomplete');
+            setupTagAutocomplete('manualTags', 'manualTags_autocomplete');
+
+            // Setup Attachment drag drop / paste capture listeners
+            setupAttachmentHandlers();
         }
 
         // ---- Setup link hover/right-click actions ----
@@ -946,7 +1214,7 @@
             const dropdown = document.getElementById(dropdownId);
             let timer;
 
-            input.addEventListener('input', function() {
+            input.addEventListener('input', function () {
                 clearTimeout(timer);
                 const val = input.value.trim();
                 if (val.length < 1) {
@@ -960,7 +1228,7 @@
                         const data = await r.json();
                         const suggestions = data.suggestions || [];
                         if (suggestions.length > 0) {
-                            dropdown.innerHTML = suggestions.map(s => 
+                            dropdown.innerHTML = suggestions.map(s =>
                                 `<div class="autocomplete-item" onclick="applySuggestion('${inputId}', '${dropdownId}', '${s.replace(/'/g, "\\'")}')">${escapeHtml(s)}</div>`
                             ).join('');
                             dropdown.style.display = 'block';
@@ -968,10 +1236,10 @@
                             dropdown.style.display = 'none';
                         }
                     } catch (e) { console.error('Suggestions lookup failed', e); }
-                }, 50); // fast 50ms suggestion loading trigger
+                }, 50);
             });
 
-            document.addEventListener('click', function(e) {
+            document.addEventListener('click', function (e) {
                 if (!e.target.closest(`#${inputId}`) && !e.target.closest(`#${dropdownId}`)) {
                     dropdown.style.display = 'none';
                 }
@@ -988,9 +1256,51 @@
             }
         }
 
+        // Tag field autocompletion lookup
+        function setupTagAutocomplete(inputId, dropdownId) {
+            const input = document.getElementById(inputId);
+            const dropdown = document.getElementById(dropdownId);
+
+            input.addEventListener('input', function () {
+                const parts = input.value.split(',');
+                const rawLast = parts[parts.length - 1] || '';
+                const last = rawLast.trim().toLowerCase();
+
+                if (!last || existingTags.length === 0) {
+                    dropdown.style.display = 'none';
+                    return;
+                }
+
+                const matches = existingTags.filter(t => t.toLowerCase().includes(last));
+                if (matches.length > 0) {
+                    dropdown.innerHTML = matches.map(m =>
+                        `<div class="autocomplete-item" onclick="applyTagSuggestion('${inputId}', '${dropdownId}', '${m.replace(/'/g, "\\'")}')">${escapeHtml(m)}</div>`
+                    ).join('');
+                    dropdown.style.display = 'block';
+                } else {
+                    dropdown.style.display = 'none';
+                }
+            });
+
+            document.addEventListener('click', function (e) {
+                if (!e.target.closest(`#${inputId}`) && !e.target.closest(`#${dropdownId}`)) {
+                    dropdown.style.display = 'none';
+                }
+            });
+        }
+
+        function applyTagSuggestion(inputId, dropdownId, tag) {
+            const input = document.getElementById(inputId);
+            const parts = input.value.split(',');
+            parts[parts.length - 1] = ' ' + tag;
+            input.value = parts.join(',').trim() + ', ';
+            document.getElementById(dropdownId).style.display = 'none';
+            input.focus();
+        }
+
         // Real-time table updates instantly as you type inside Search Input
         let searchInputTimer;
-        document.getElementById('searchInput').addEventListener('input', function() {
+        document.getElementById('searchInput').addEventListener('input', function () {
             clearTimeout(searchInputTimer);
             searchInputTimer = setTimeout(() => {
                 currentOffset = 0;
@@ -1003,8 +1313,7 @@
             currentTab = tab;
             document.getElementById('allLeadsTabBtn').className = tab === 'all' ? 'btn active' : 'btn';
             document.getElementById('contactsTabBtn').className = tab === 'contacts' ? 'btn active' : 'btn';
-            
-            // Adjust bulk contact buttons
+
             const bulkContactBtn = document.getElementById('bulkContactActionBtn');
             if (tab === 'contacts') {
                 bulkContactBtn.textContent = 'Remove from Contacts';
@@ -1016,7 +1325,7 @@
                 bulkContactBtn.style.borderColor = 'var(--accent-glow)';
             }
 
-            currentOffset = 0; // Reset offset on switcher toggle
+            currentOffset = 0;
             clearSelection();
             loadLeads();
         }
@@ -1054,7 +1363,7 @@
             const checked = document.querySelectorAll('.row-checkbox:checked');
             const bar = document.getElementById('bulkActionBar');
             const text = document.getElementById('bulkActionText');
-            
+
             if (checked.length > 0) {
                 text.textContent = `${checked.length} items selected`;
                 bar.style.display = 'flex';
@@ -1064,6 +1373,7 @@
             }
         }
 
+        // ---- Multi-Select Action Execution ----
         function getSelectedLeadIds() {
             const checked = document.querySelectorAll('.row-checkbox:checked');
             const ids = [];
@@ -1084,7 +1394,7 @@
             const ids = getSelectedLeadIds();
             if (!ids.length) return;
             const makeContact = (currentTab !== 'contacts');
-            
+
             try {
                 const r = await fetch(`${API}/leads/bulk-contact`, {
                     method: 'POST',
@@ -1124,7 +1434,7 @@
             } catch (e) { showToast('Bulk action error: ' + e.message, 'error'); }
         }
 
-        // ---- Stats ----
+        // ---- Stats & Tags Fetch ----
         async function loadStats() {
             try {
                 const r = await fetch(API + '/stats');
@@ -1138,18 +1448,60 @@
             } catch (e) { console.error('stats failed', e); }
         }
 
+        async function loadTags() {
+            try {
+                const r = await fetch(API + '/tags');
+                const data = await r.json();
+                existingTags = data.tags || [];
+
+                const filter = document.getElementById('tagFilter');
+                const currentSel = filter.value;
+                filter.innerHTML = '<option value="">All tags</option>' +
+                    existingTags.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+                filter.value = currentSel;
+            } catch (e) { console.error('tags failed', e); }
+        }
+
+        // ---- Column Sort Controller ----
+        function setSort(column) {
+            if (currentSortBy === column) {
+                currentSortOrder = (currentSortOrder === 'desc') ? 'asc' : 'desc';
+            } else {
+                currentSortBy = column;
+                currentSortOrder = 'desc';
+            }
+            loadLeads();
+        }
+
+        function updateSortHeaders() {
+            const headers = ['priority_score', 'name', 'industry', 'wilaya', 'phone', 'source', 'freshness', 'status'];
+            headers.forEach(h => {
+                const el = document.getElementById(`th-${h}`);
+                if (!el) return;
+                el.className = '';
+                if (currentSortBy === h) {
+                    el.className = currentSortOrder === 'desc' ? 'sorted-desc' : 'sorted-asc';
+                }
+            });
+        }
+
         // ---- Leads list ----
         async function loadLeads() {
+            updateSortHeaders();
             const params = new URLSearchParams({
                 limit: String(PAGE_SIZE),
                 offset: String(currentOffset),
+                sort_by: currentSortBy,
+                sort_order: currentSortOrder
             });
             const search = document.getElementById('searchInput').value.trim();
             const freshness = document.getElementById('freshnessFilter').value;
+            const tag = document.getElementById('tagFilter').value;
+
             if (search) params.set('q', search);
             if (freshness) params.set('age_class', freshness);
-            
-            // Pass tab filters to enforce clean mutual exclusivity
+            if (tag) params.set('tag', tag);
+
             if (currentTab === 'contacts') {
                 params.set('is_contact', 'true');
             } else {
@@ -1184,17 +1536,23 @@
                 const fresh = l.freshness || 'older';
                 const freshClass = `freshness freshness-${fresh}`;
                 const statusBadge = statusToBadge(l.status);
+
+                const tagBadges = (l.tags || []).map(t => `<span class="badge badge-tag">${escapeHtml(t)}</span>`).join('');
+
                 return `<tr onclick="selectLead(${l.id})" class="${selectedLeadId === l.id ? 'selected' : ''}">
-            <td style="text-align: center;" onclick="event.stopPropagation();"><input type="checkbox" class="row-checkbox" value="${l.id}" onchange="updateBulkActionsBar()"></td>
-            <td><span class="confidence">${score}</span></td>
-            <td><strong>${escapeHtml(l.name)}</strong></td>
-            <td>${escapeHtml(l.industry || '—')}</td>
-            <td>${escapeHtml(l.wilaya || '—')}</td>
-            <td style="font-family: var(--font-mono); font-size: 11px;">${escapeHtml(phone)}</td>
-            <td><span class="badge badge-info">${escapeHtml(l.source || '—')}</span></td>
-            <td><span class="${freshClass}">${fresh}</span></td>
-            <td>${statusBadge}</td>
-        </tr>`;
+                    <td style="text-align: center;" onclick="event.stopPropagation();"><input type="checkbox" class="row-checkbox" value="${l.id}" onchange="updateBulkActionsBar()"></td>
+                    <td><span class="confidence">${score}</span></td>
+                    <td>
+                        <strong>${escapeHtml(l.name)}</strong>
+                        <div style="margin-top: 2px; display: flex; flex-wrap: wrap;">${tagBadges}</div>
+                    </td>
+                    <td>${escapeHtml(l.industry || '—')}</td>
+                    <td>${escapeHtml(l.wilaya || '—')}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px;">${escapeHtml(phone)}</td>
+                    <td><span class="badge badge-info">${escapeHtml(l.source || '—')}</span></td>
+                    <td><span class="${freshClass}">${fresh}</span></td>
+                    <td>${statusBadge}</td>
+                </tr>`;
             }).join('');
         }
 
@@ -1220,10 +1578,9 @@
             try {
                 const r = await fetch(API + '/leads/' + id);
                 const lead = await r.json();
-                activeLeadData = lead; // Save populated instance cache
+                activeLeadData = lead;
                 renderAudit(lead);
-                
-                // Adjust contacts toggle text and styles
+
                 const toggleBtn = document.getElementById('contactToggleBtn');
                 if (lead.is_contact) {
                     toggleBtn.textContent = 'Remove from Contacts';
@@ -1236,29 +1593,32 @@
                     toggleBtn.style.backgroundColor = 'var(--accent-glow)';
                     toggleBtn.style.color = '#080a10';
                 }
+
+                // Render attachments list
+                document.getElementById('attachmentsCard').style.display = '';
+                await loadAttachmentsList(id);
             } catch (e) { showToast('Failed to load lead detail', 'error'); }
         }
 
         function renderAudit(lead) {
             const card = document.getElementById('auditCard');
             card.innerHTML = `
-        <div class="lineage-title">Lead Details</div>
-        <div class="metadata-row"><span class="metadata-label">ID</span><span class="metadata-value">${lead.id}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Name</span><span class="metadata-value">${escapeHtml(lead.name)}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Industry</span><span class="metadata-value">${escapeHtml(lead.industry || '—')}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Wilaya</span><span class="metadata-value">${escapeHtml(lead.wilaya || '—')}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Address</span><span class="metadata-value">${escapeHtml(lead.address || '—')}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Website</span><span class="metadata-value">${lead.website ? `<a href="${lead.website}" class="app-link" target="_blank">${escapeHtml(lead.website)}</a>` : '—'}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Rating</span><span class="metadata-value">${lead.rating || 0} (${lead.review_count || 0} reviews)</span></div>
-        <div class="metadata-row"><span class="metadata-label">Discovered</span><span class="metadata-value">${formatDate(lead.discovered_at)}</span></div>
-        <div class="metadata-row"><span class="metadata-label">Source URL</span><span class="metadata-value">${lead.source_url ? `<a href="${lead.source_url}" class="app-link" target="_blank">${escapeHtml(lead.source_url)}</a>` : '—'}</span></div>
-    `;
+                <div class="lineage-title">Lead Details</div>
+                <div class="metadata-row"><span class="metadata-label">ID</span><span class="metadata-value">${lead.id}</span></div>
+                <div class="metadata-row"><span class="metadata-label">Name</span><span class="metadata-value">${lead.name ? escapeHtml(lead.name) : '—'}</span></div>
+                <div class="metadata-row"><span class="metadata-label">Industry</span><span class="metadata-value">${lead.industry ? escapeHtml(lead.industry) : '—'}</span></div>
+                <div class="metadata-row"><span class="metadata-label">Wilaya</span><span class="metadata-value">${lead.wilaya ? escapeHtml(lead.wilaya) : '—'}</span></div>
+                <div class="metadata-row"><span class="metadata-label">Address</span><span class="metadata-value">${lead.address ? escapeHtml(lead.address) : '—'}</span></div>
+                <div class="metadata-row"><span class="metadata-label">Website</span><span class="metadata-value">${lead.website ? `<a href="${lead.website}" class="app-link" target="_blank">${escapeHtml(lead.website)}</a>` : '—'}</span></div>
+                <div class="metadata-row"><span class="metadata-label">Rating</span><span class="metadata-value">${lead.rating || 0} (${lead.review_count || 0} reviews)</span></div>
+                <div class="metadata-row"><span class="metadata-label">Discovered</span><span class="metadata-value">${formatDate(lead.discovered_at)}</span></div>
+                <div class="metadata-row"><span class="metadata-label">Source URL</span><span class="metadata-value">${lead.source_url ? `<a href="${lead.source_url}" class="app-link" target="_blank">${escapeHtml(lead.source_url)}</a>` : '—'}</span></div>
+            `;
             document.getElementById('overrideName').value = lead.name || '';
             document.getElementById('overrideWebsite').value = lead.website || '';
             document.getElementById('overridePhone').value = lead.phone || '';
             document.getElementById('overrideTags').value = (lead.tags || []).join(', ');
 
-            // Contact channels
             const contactCard = document.getElementById('contactCard');
             const phones = lead.phone_metadata || [];
             if (phones.length || lead.email || (lead.social_media && lead.social_media.length)) {
@@ -1302,7 +1662,6 @@
                 contactCard.style.display = 'none';
             }
 
-            // LLM analysis
             const analysisCard = document.getElementById('analysisCard');
             if (lead.analysis) {
                 analysisCard.style.display = '';
@@ -1325,6 +1684,198 @@
             }
         }
 
+        // ---- Persistent Screenshot & File Attachments Engine ----
+        function setupAttachmentHandlers() {
+            const zone = document.getElementById('attachmentDropZone');
+            zone.addEventListener('click', () => document.getElementById('attachmentFileInput').click());
+
+            // Clipboard Paste screenshots binder
+            window.addEventListener('paste', async (e) => {
+                if (!selectedLeadId) return;
+
+                const act = document.activeElement;
+                if (act && (act.tagName === 'INPUT' || act.tagName === 'TEXTAREA')) {
+                    return;
+                }
+
+                const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') === 0) {
+                        const file = items[i].getAsFile();
+                        await uploadAttachment(file);
+                    }
+                }
+            });
+        }
+
+        function dragOverDropZone(e) {
+            e.preventDefault();
+            document.getElementById('attachmentDropZone').classList.add('dragover');
+        }
+
+        function dragLeaveDropZone(e) {
+            e.preventDefault();
+            document.getElementById('attachmentDropZone').classList.remove('dragover');
+        }
+
+        async function handleFileDrop(e) {
+            e.preventDefault();
+            document.getElementById('attachmentDropZone').classList.remove('dragover');
+            if (!selectedLeadId) { showToast('Select a lead first', 'error'); return; }
+            const files = e.dataTransfer.files;
+            for (let i = 0; i < files.length; i++) {
+                await uploadAttachment(files[i]);
+            }
+        }
+
+        async function handleFileSelect(input) {
+            if (!selectedLeadId) { showToast('Select a lead first', 'error'); return; }
+            const files = input.files;
+            for (let i = 0; i < files.length; i++) {
+                await uploadAttachment(files[i]);
+            }
+            input.value = ''; // Reset input
+        }
+
+        async function uploadAttachment(file) {
+            showToast('Uploading attachment...');
+            const formData = new FormData();
+            formData.append('file', file, file.name || `pasted_screenshot_${Date.now()}.png`);
+
+            try {
+                const r = await fetch(`${API}/leads/${selectedLeadId}/attachments`, {
+                    method: 'POST',
+                    body: formData
+                });
+                if (r.ok) {
+                    showToast('Attachment uploaded successfully', 'success');
+                    await loadAttachmentsList(selectedLeadId);
+                } else {
+                    showToast('Attachment upload failed', 'error');
+                }
+            } catch (e) {
+                showToast('Upload error: ' + e.message, 'error');
+            }
+        }
+
+        async function loadAttachmentsList(leadId) {
+            try {
+                const r = await fetch(`${API}/leads/${leadId}/attachments`);
+                const data = await r.json();
+                const list = document.getElementById('attachmentsList');
+                const files = data.attachments || [];
+
+                if (files.length === 0) {
+                    list.innerHTML = '<div style="font-size:11px; color:var(--text-muted); padding:5px 0;">No screenshots or files pinned yet.</div>';
+                    return;
+                }
+
+                list.innerHTML = files.map(f => {
+                    const isImg = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'].includes(f.mime_type.toLowerCase());
+                    const downloadUrl = `${API}/attachments/${f.id}`;
+                    if (isImg) {
+                        return `<div class="attachment-thumb" title="${escapeHtml(f.filename)}" onclick="window.open('${downloadUrl}', '_blank')">
+                            <button class="delete-btn" onclick="deleteAttachment(event, ${f.id})" title="Delete Attachment">&times;</button>
+                            <img src="${downloadUrl}" alt="Attachment">
+                        </div>`;
+                    } else {
+                        return `<div class="attachment-thumb" title="${escapeHtml(f.filename)}" onclick="window.open('${downloadUrl}', '_blank')" style="display:flex; align-items:center; justify-content:center; font-size:24px; color:var(--text-muted);">
+                            <button class="delete-btn" onclick="deleteAttachment(event, ${f.id})" title="Delete Attachment">&times;</button>
+                            🗎
+                        </div>`;
+                    }
+                }).join('');
+            } catch (e) {
+                console.error('Failed to load attachments', e);
+            }
+        }
+
+        async function deleteAttachment(event, attachmentId) {
+            event.stopPropagation();
+            if (!confirm("Are you sure you want to delete this attachment permanently?")) return;
+            try {
+                const r = await fetch(`${API}/attachments/${attachmentId}`, {
+                    method: 'DELETE'
+                });
+                if (r.ok) {
+                    showToast('Attachment deleted successfully', 'success');
+                    await loadAttachmentsList(selectedLeadId);
+                } else {
+                    showToast('Failed to delete attachment', 'error');
+                }
+            } catch (e) {
+                showToast('Delete error: ' + e.message, 'error');
+            }
+        }
+
+        // ---- Add Manual Lead Modal Handlers ----
+        function openAddLeadModal() {
+            document.getElementById('addLeadModal').style.display = 'flex';
+        }
+
+        function closeAddLeadModal() {
+            document.getElementById('addLeadModal').style.display = 'none';
+            // Clear fields
+            document.getElementById('manualName').value = '';
+            document.getElementById('manualIndustry').value = '';
+            document.getElementById('manualWilaya').value = '';
+            document.getElementById('manualAddress').value = '';
+            document.getElementById('manualWebsite').value = '';
+            document.getElementById('manualPhone').value = '';
+            document.getElementById('manualEmail').value = '';
+            document.getElementById('manualTags').value = '';
+        }
+
+        async function submitManualLead() {
+            const name = document.getElementById('manualName').value.trim();
+            const industry = document.getElementById('manualIndustry').value.trim();
+            const wilaya = document.getElementById('manualWilaya').value.trim();
+            const address = document.getElementById('manualAddress').value.trim();
+            const website = document.getElementById('manualWebsite').value.trim();
+            const phone = document.getElementById('manualPhone').value.trim();
+            const email = document.getElementById('manualEmail').value.trim();
+            const tags = document.getElementById('manualTags').value
+                .split(',').map(t => t.trim()).filter(Boolean);
+
+            if (!name || !industry || !wilaya) {
+                showToast('Please fill in all required (*) fields.', 'error');
+                return;
+            }
+
+            try {
+                const payload = {
+                    name, industry, wilaya,
+                    address: address || null,
+                    website: website || null,
+                    phone: phone || null,
+                    email: email || null,
+                    tags
+                };
+
+                const r = await fetch(`${API}/leads/manual`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (r.ok) {
+                    const data = await r.json();
+                    showToast('Manual Lead created successfully!', 'success');
+                    closeAddLeadModal();
+                    await loadLeads();
+                    await loadTags();
+                    await loadStats();
+                    if (data.id) {
+                        await selectLead(data.id);
+                    }
+                } else {
+                    showToast('Failed to create manual lead', 'error');
+                }
+            } catch (e) {
+                showToast('Creation error: ' + e.message, 'error');
+            }
+        }
+
         // ---- Discovery ----
         async function runDiscovery() {
             const query = document.getElementById('discoverQuery').value.trim();
@@ -1335,7 +1886,6 @@
             const btn = document.getElementById('discoverBtn');
             btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Queueing...';
             try {
-                // Run with background: true so the browser never blocks or freezes
                 const r = await fetch(API + '/discover', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1448,8 +1998,9 @@
 
                 if (r.ok) {
                     showToast('Changes saved successfully', 'success');
-                    await loadLeads(); // Instantly update view
-                    await selectLead(selectedLeadId); // Refresh details pane
+                    await loadLeads();
+                    await selectLead(selectedLeadId);
+                    await loadTags();
                     await loadStats();
                 } else {
                     showToast('Failed to save corrections', 'error');
@@ -1464,7 +2015,7 @@
                 const r = await fetch(`${API}/leads/${selectedLeadId}/status`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: 'rejected' }), // 'rejected' status excludes it from list queries automatically
+                    body: JSON.stringify({ status: 'rejected' }),
                 });
                 if (r.ok) {
                     showToast('Lead blocked successfully', 'success');
@@ -1477,6 +2028,7 @@
             `;
                     document.getElementById('contactCard').style.display = 'none';
                     document.getElementById('analysisCard').style.display = 'none';
+                    document.getElementById('attachmentsCard').style.display = 'none';
                     await loadLeads();
                     await loadStats();
                 } else {

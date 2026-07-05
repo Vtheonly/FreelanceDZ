@@ -231,6 +231,9 @@ class ILeadRepository(ABC):
         age_class: Optional[FreshnessAge] = None,
         min_score: float = 0.0,
         is_contact: Optional[bool] = None,
+        tag: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "desc",
         limit: int = 100,
         offset: int = 0,
     ) -> list[Lead]: ...
@@ -275,6 +278,26 @@ class ILeadRepository(ABC):
     @abstractmethod
     async def bulk_set_status(self, business_ids: list[int], status: LeadStatus) -> None:
         """Set the workflow status of multiple leads concurrently."""
+
+    @abstractmethod
+    async def get_all_tags(self) -> list[str]:
+        """Compile and fetch all unique tags currently existing in the lead scores database."""
+
+    @abstractmethod
+    async def create_manual_lead(self, business: BusinessRaw, tags: list[str]) -> int:
+        """Save manually typed business data directly as a lead record and return its generated ID."""
+
+    @abstractmethod
+    async def add_attachment(self, raw_record_id: int, filename: str, mime_type: str, file_path: str) -> int:
+        """Create a metadata reference link connecting a localized disk image file to a lead."""
+
+    @abstractmethod
+    async def get_attachments(self, raw_record_id: int) -> list[dict]:
+        """Fetch all metadata references for screenshots or files pinned to a target lead."""
+
+    @abstractmethod
+    async def delete_attachment(self, attachment_id: int) -> bool:
+        """Remove physical file and relational metadata reference of an attachment."""
 
 
 class ICrawlQueueRepository(ABC):

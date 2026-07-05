@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+from pathlib import Path
+import shutil
+import uuid
+import asyncio
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from rapidfuzz import process, fuzz
 
-from api.dependencies import get_analysis_service, get_lead_repo, get_scoring_service
+from api.dependencies import get_analysis_service, get_lead_repo, get_scoring_service, get_settings_dep
+from config.settings import AppSettings
 from core.interfaces import ILeadRepository
-from domain.enums import FreshnessAge, LeadStatus
+from domain.enums import FreshnessAge, LeadStatus, DataSource
+from domain.models import BusinessRaw
+from domain.value_objects import FreshnessMetadata
 from services.analysis_service import AnalysisService
 from services.scoring_service import ScoringService
 
@@ -51,6 +59,17 @@ class BulkStatusRequest(BaseModel):
     status: str
 
 
+class ManualLeadCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200, description="Business name")
+    industry: str = Field(..., min_length=1, max_length=100, description="Category/Industry")
+    wilaya: str = Field(..., min_length=1, max_length=100, description="Wilaya localization")
+    address: Optional[str] = Field(None, description="Optional street address")
+    website: Optional[str] = Field(None, description="Optional website URL")
+    phone: Optional[str] = Field(None, description="Optional phone number")
+    email: Optional[str] = Field(None, description="Optional email address")
+    tags: list[str] = Field(default_factory=list, description="Initial list of classification tags")
+
+
 @router.get("/leads")
 async def list_leads(
     wilaya: Optional[str] = Query(None),
@@ -58,17 +77,23 @@ async def list_leads(
     age_class: Optional[FreshnessAge] = Query(None),
     min_score: float = Query(0.0, ge=0.0, le=100.0),
     is_contact: Optional[bool] = Query(None),
+    tag: Optional[str] = Query(None, description="Filter leads by a specific tag"),
+    sort_by: Optional[str] = Query(None, description="Field to sort by"),
+    sort_order: str = Query("desc", description="Sorting direction: asc or desc"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     repo: ILeadRepository = Depends(get_lead_repo),
 ):
-    """List leads with optional filters. Supports pagination, contacts-only filter, + freshness filter."""
+    """List leads with optional filters. Supports pagination, sorting, tags filter, + freshness filter."""
     leads = await repo.list_leads(
         wilaya=wilaya,
         industry=industry,
         age_class=age_class,
         min_score=min_score,
         is_contact=is_contact,
+        tag=tag,
+        sort_by=sort_by,
+        sort_order=sort_order,
         limit=limit,
         offset=offset,
     )
@@ -102,41 +127,131 @@ async def search_leads(
     return {"count": len(leads), "leads": [_lead_summary(l) for l in leads]}
 
 
-@router.get("/search/autocomplete")
-async def autocomplete(
-    q: str = Query("", min_length=1),
+@router.get("/tags")
+async def list_tags(
     repo: ILeadRepository = Depends(get_lead_repo),
 ):
-    """Tokenize-indexed, prefix-prioritized, and typo-tolerant search suggestions."""
-    if not q or not q.strip():
-        return {"suggestions": []}
+    """Fetch all unique custom tags created inside the system."""
+    tags = await repo.get_all_tags()
+    return {"tags": tags}
 
-    q_clean = q.strip().lower()
-    vocab = await repo.get_search_vocabulary()
 
-    # Prioritization 1: Prefix Matches
-    prefix_matches = [w for w in vocab if w.lower().startswith(q_clean)]
+@router.post("/leads/manual")
+async def create_manual_lead(
+    body: ManualLeadCreate,
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Manually add a fresh customized B2B lead to the localized database."""
+    phone_metadata = []
+    if body.phone:
+        from utils.phone_validator import SmartPhoneValidator
+        validator = SmartPhoneValidator()
+        phone_metadata = validator.extract_and_validate(body.phone)
 
-    # Prioritization 2: Typo-Tolerant Fuzzy Matching
-    fuzzy_results = process.extract(
-        q_clean,
-        vocab,
-        scorer=fuzz.WRatio,
-        limit=15,
-        score_cutoff=55.0  # Cutoff tolerates 1-3 typos depending on length
+    biz = BusinessRaw(
+        name=body.name,
+        industry=body.industry,
+        wilaya=body.wilaya,
+        address=body.address,
+        website=body.website,
+        phone=body.phone,
+        email=body.email,
+        source=DataSource.MANUAL,
+        phone_metadata=phone_metadata,
+        freshness=FreshnessMetadata(),
+        discovered_at=datetime.now(timezone.utc)
     )
-    fuzzy_matches = [r[0] for r in fuzzy_results]
 
-    # Combine prefix items first and eliminate duplicates
-    combined = []
-    seen = set()
-    for word in prefix_matches + fuzzy_matches:
-        word_lower = word.lower()
-        if word_lower not in seen:
-            seen.add(word_lower)
-            combined.append(word)
+    lead_id = await repo.create_manual_lead(biz, body.tags)
+    return {"ok": True, "id": lead_id}
 
-    return {"suggestions": combined[:10]}
+
+@router.post("/leads/{lead_id}/attachments")
+async def upload_attachment(
+    lead_id: int,
+    file: UploadFile = File(...),
+    repo: ILeadRepository = Depends(get_lead_repo),
+    settings: AppSettings = Depends(get_settings_dep),
+):
+    """Save an image or file screenshot pinned to a specific lead permanently."""
+    attachments_dir = Path(settings.DATABASE_PATH).parent / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    unique_id = uuid.uuid4().hex
+    ext = Path(file.filename).suffix or ".png"
+    disk_filename = f"{unique_id}{ext}"
+    target_path = attachments_dir / disk_filename
+
+    try:
+        with target_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as exc:
+        _logger.exception("Failed to write screenshot file on disk")
+        raise HTTPException(status_code=500, detail=f"File save failure: {exc}")
+
+    attachment_id = await repo.add_attachment(
+        raw_record_id=lead_id,
+        filename=file.filename,
+        mime_type=file.content_type or "image/png",
+        file_path=str(target_path)
+    )
+
+    return {
+        "ok": True,
+        "attachment_id": attachment_id,
+        "filename": file.filename,
+        "mime_type": file.content_type or "image/png"
+    }
+
+
+@router.get("/leads/{lead_id}/attachments")
+async def list_attachments(
+    lead_id: int,
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Get all file attachment records attached to a lead."""
+    attachments = await repo.get_attachments(lead_id)
+    return {"attachments": attachments}
+
+
+@router.delete("/attachments/{attachment_id}")
+async def delete_attachment(
+    attachment_id: int,
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Remove file reference and physically delete the file on server disk."""
+    success = await repo.delete_attachment(attachment_id)
+    if not success:
+         raise HTTPException(status_code=404, detail="Attachment reference not found")
+    return {"ok": True}
+
+
+@router.get("/attachments/{attachment_id}")
+async def retrieve_attachment(
+    attachment_id: int,
+    repo: ILeadRepository = Depends(get_lead_repo),
+):
+    """Stream raw binary content of a localized screenshot file."""
+    def _fetch_attachment_path():
+        with repo._db.connection() as conn:
+            return conn.execute(
+                "SELECT file_path, mime_type, filename FROM lead_attachments WHERE id = ?",
+                (attachment_id,)
+            ).fetchone()
+
+    row = await asyncio.to_thread(_fetch_attachment_path)
+    if not row:
+        raise HTTPException(status_code=404, detail="Attachment reference not found")
+
+    file_path = Path(row["file_path"])
+    if not file_path.exists():
+         raise HTTPException(status_code=404, detail="File lost or missing on disk server")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=row["mime_type"],
+        filename=row["filename"]
+    )
 
 
 @router.post("/leads/{lead_id}/tags")
