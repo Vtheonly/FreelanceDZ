@@ -229,6 +229,37 @@ def test_route_index_generated_from_app(client):
     assert "GET /api/v2/search/autocomplete" in endpoints
 
 
+# ---------------------------------------------------------------------------
+# Issue #4 — informative root redirect
+# ---------------------------------------------------------------------------
+def test_root_redirects_to_docs(client):
+    """GET / must never regress to a raw 404 (issue #4).
+
+    The API is headless by design; the root exists only to point developers
+    at the Swagger UI with a 307 (temporary) redirect.
+    """
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 307, resp.text
+    assert resp.headers["location"] == "/docs"
+    # The route is a developer convenience, not an API contract.
+    assert "/" not in [r.path for r in client.app.routes if getattr(r, "include_in_schema", True)]
+
+
+def test_root_redirect_lands_on_swagger_ui(client):
+    """Following the redirect loads the interactive OpenAPI docs."""
+    resp = client.get("/", follow_redirects=True)
+    assert resp.status_code == 200
+    assert resp.url.path == "/docs"
+    assert "swagger" in resp.text.lower()
+
+
+def test_health_unchanged_by_root_route(client):
+    """Existing routes (health) remain byte-for-byte contract-stable."""
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
 def test_crawler_status_and_stop(client):
     resp = client.get("/api/v2/crawler/status")
     assert resp.status_code == 200

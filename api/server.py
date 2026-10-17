@@ -12,6 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 
 from api.routes import checkpoints as checkpoints_routes
 from api.routes import geo as geo_routes
@@ -73,6 +74,15 @@ def create_app() -> FastAPI:
                 if hasattr(route, "methods") and route.methods
             )
         }
+
+    # Issue #4: the API is intentionally headless, but opening the bare
+    # service root should point developers somewhere useful instead of a
+    # raw 404. 307 (temporary) keeps semantics honest — the redirect target
+    # stays configurable via the docs_url; hidden from the OpenAPI schema
+    # because it is a developer convenience, not an API contract.
+    @app.get("/", include_in_schema=False)
+    async def root_redirect():
+        return RedirectResponse(url="/docs", status_code=307)
 
     return app
 

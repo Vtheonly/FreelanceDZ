@@ -11,6 +11,12 @@ Conventions:
 - Empty optional filters mean "not filtered"; an empty `wilaya` string is
   normalised to *nationwide*, never a 422 (v4 Task 4).
 
+## Root
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/` | developer convenience: HTTP 307 redirect to `/docs` (Swagger UI). Not part of the OpenAPI schema (issue #4) |
+
 ## Health
 
 | Method | Path | Notes |
