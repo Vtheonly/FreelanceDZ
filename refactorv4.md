@@ -1,8 +1,4 @@
-first go to /home/mersel/Documents/Projects/FreelanceDZ/refactorv3.md in https://github.com/Vtheonly/FreelanceDZ
 
-and read alllll the issues and then
-
-fix theses issues 
 Here is the complete, prioritized engineering breakdown. Every task is categorized, with **exact implementation instructions**, **concrete code changes**, and **precise testing strategies** to verify it works.
 
 ---
