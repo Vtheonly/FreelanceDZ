@@ -245,7 +245,7 @@ def test_crawler_start_flow_renders_seed_count_toast(engine_server):
     assert not at.exception
 
     at.text_input(key="crawler_queries").set_value("menuiserie Alger")
-    at.button("Start crawl").click().run()
+    at.button(key="crawler_start").click().run()
 
     assert not at.exception, [str(e.value) for e in at.exception]
 
@@ -269,7 +269,7 @@ def test_crawler_stop_flow_stops_engine_and_renders_toast(engine_server):
     at = _run_app(engine_server)
     assert not at.exception
 
-    at.button("■ Stop crawler").click().run()
+    at.button(key="crawler_stop").click().run()
     assert not at.exception, [str(e.value) for e in at.exception]
 
     status = httpx.get(f"{engine_server}/api/v2/crawler/status", timeout=30).json()

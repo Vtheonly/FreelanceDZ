@@ -83,7 +83,7 @@ def _crawler_controls(active: bool) -> None:
     from ui.api_client import EngineError, EngineUnavailable, start_crawler, stop_crawler
 
     if active:
-        if st.button("■ Stop crawler", use_container_width=True):
+        if st.button("■ Stop crawler", key="crawler_stop", use_container_width=True):
             try:
                 stop_crawler()
                 st.toast("Crawler stopping…", icon="🛑")
@@ -97,7 +97,7 @@ def _crawler_controls(active: bool) -> None:
                 placeholder="menuiserie Alger, boulangerie Oran",
                 key="crawler_queries",
             )
-            if st.button("Start crawl", use_container_width=True):
+            if st.button("Start crawl", key="crawler_start", use_container_width=True):
                 parsed = [q.strip() for q in queries.split(",") if q.strip()]
                 if not parsed:
                     st.error("Provide at least one query.")
