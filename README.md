@@ -16,11 +16,16 @@ modern Streamlit workspace as its UI.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-ui.txt -r requirements-dev.txt
+python scripts/setup_env.py   # resilient install + verification (timeout retries,
+                              # conflict detection, import checks — see docs/08)
 
 python cli.py serve      # engine  → http://localhost:8080 (docs at /docs)
 python cli.py ui         # workspace → http://localhost:8501
 ```
+
+(Plain pip works too: `pip install -r requirements.txt -r requirements-ui.txt
+-r requirements-dev.txt` in one command — retry the same command on a
+download timeout; nothing needs deleting.)
 
 ## Quick start (Docker)
 

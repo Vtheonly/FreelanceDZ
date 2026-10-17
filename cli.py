@@ -183,6 +183,21 @@ def ui(port: int, engine: Optional[str]):
     import sys
     from pathlib import Path
 
+    from core.dependency_guard import (
+        MissingUIDependencyError,
+        verify_runtime_dependencies,
+        verify_ui_dependencies,
+    )
+
+    # Issue #24: a partial UI install (e.g. pip died mid-download on a flaky
+    # link) must stop HERE with an actionable message — not surface as a raw
+    # ModuleNotFoundError traceback inside Streamlit.
+    verify_runtime_dependencies()  # conservative no-op in pure-UI environments
+    try:
+        verify_ui_dependencies()
+    except MissingUIDependencyError as exc:
+        raise click.ClickException(str(exc)) from None
+
     app_path = Path(__file__).resolve().parent / "ui" / "app.py"
     if engine:
         os.environ["ENGINE_URL"] = engine

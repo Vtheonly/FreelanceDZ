@@ -11,8 +11,42 @@
 git clone https://github.com/Vtheonly/FreelanceDZ.git
 cd FreelanceDZ
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-ui.txt -r requirements-dev.txt
+python scripts/setup_env.py     # resilient install + verification (issue #24)
 cp .env.example .env            # optional: adjust to taste
+```
+
+`scripts/setup_env.py` is a stdlib-only installer wrapper that makes the
+two historical clean-machine failure modes explicit and distinguishable
+(the plain-pip alternative is documented below):
+
+* **Transient download timeouts** — pip runs with a bounded, configurable
+  connection timeout (`--timeout`, default 120 s, `$PIP_DEFAULT_TIMEOUT`
+  honoured) and bounded network retries (`--retries`, default 3). Output
+  is streamed live, never hidden. On failure the script exits non-zero
+  and prints the retry guidance: **just re-run the same command** —
+  pip's HTTP cache keeps completed downloads and nothing deletes your
+  venv, `.env` or `data/` directory.
+* **Dependency conflicts (issue #3)** — pip famously exits **0** after
+  printing `ERROR: pip's dependency resolver … which is incompatible`
+  (see `docs/refactor/error.log.md`). The script scans for that banner
+  and fails with the issue-#3 remediation instead of letting you walk
+  into the Starlette crash.
+* **Post-install verification** — after installing, it runs
+  `pip check` and import-verifies both stacks in a fresh interpreter:
+  `api.server` (engine) and `streamlit`, `streamlit_folium`, `folium`,
+  `pandas` (UI). A missing component is named explicitly, so a partial
+  install can never be reported as successful.
+
+Exit codes: `0` verified · `1` pip failed (retry) · `2` dependency
+conflict (issue #3) · `3` `pip check` failed · `4` import verification
+failed. `python scripts/setup_env.py --check-only` verifies an existing
+environment without installing; `--ui-only` / `--engine-only` support the
+strict-isolation layout below.
+
+### Plain-pip alternative
+
+```bash
+pip install -r requirements.txt -r requirements-ui.txt -r requirements-dev.txt
 ```
 
 Install all requirement files **in one command** so pip resolves the
@@ -24,6 +58,8 @@ resolves cleanly. Never install `requirements-ui.txt` *after* the
 engine set in the same venv on an older fastapi: pip can then upgrade
 Starlette past fastapi's supported range with only a warning (the
 historical issue-#3 crash; see `core/dependency_guard.py`).
+If a download times out, simply re-run the same `pip install` command —
+completed wheels are cached and no user data is touched.
 
 ### Verify the environment (issue #3)
 
@@ -62,6 +98,12 @@ python cli.py ui
 Open `http://localhost:8501` — the workspace talks to the engine at
 `ENGINE_URL` (default `http://localhost:8080`).
 
+Both commands preflight their dependencies: `serve` runs the runtime
+dependency guard (issue #3), and `ui` additionally verifies the Streamlit
+stack is fully installed (issue #24) — a partial install stops with the
+missing components named and the remediation printed, never a raw
+`ModuleNotFoundError` from inside Streamlit.
+
 ## Day-to-day commands
 
 ```bash
@@ -95,7 +137,7 @@ infrastructure/ storage (SQLite + repos), scrapers, http, resilience
 services/     discovery, resolution, crawler, export orchestration
 ui/           Streamlit workspace (pure API client)
 benchmarks/   engine + storage benchmarks
-scripts/      geographic data acquisition
+scripts/      geographic data acquisition + resilient environment setup
 tests/        the verification suite
 docs/         this documentation
 docker/       per-service Dockerfiles (compose at repo root)

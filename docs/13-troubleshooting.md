@@ -1,5 +1,22 @@
 # 13 · Troubleshooting & Diagnostics
 
+## pip install died mid-download (ReadTimeoutError)
+
+A transient network failure while fetching a large wheel (the ~10.4 MB
+Streamlit wheel is the historical example — see
+`docs/refactor/error.log.md`) aborts the install midway. **Re-run the
+same install command**: pip's HTTP cache keeps completed downloads and
+nothing deletes your venv, `.env` or `data/`. Use the resilient wrapper
+to make this explicit (bounded timeout/retries, streamed output,
+post-install import verification — issue #24):
+
+```bash
+python scripts/setup_env.py            # or --check-only to verify what's installed
+```
+
+`cli.py ui` also preflights the Streamlit stack and names exactly which
+component is missing instead of crashing with a raw traceback.
+
 ## `RuntimeDependencyError` on import or `cli.py serve`
 
 The environment holds a provably incompatible framework trio — almost

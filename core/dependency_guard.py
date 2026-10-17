@@ -33,6 +33,7 @@ constructs any router) and into ``cli.py serve``. Repeatable checks live in
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import re
 from dataclasses import dataclass
@@ -261,11 +262,76 @@ def verify_runtime_dependencies(
     )
 
 
+# ---------------------------------------------------------------------------
+# UI runtime availability (issue #24)
+# ---------------------------------------------------------------------------
+# A partially-installed environment (e.g. pip died mid-way through the
+# Streamlit wheel on a flaky link) used to surface as a raw
+# ``ModuleNotFoundError`` traceback deep inside Streamlit launch. The
+# ``cli.py ui`` preflight instead names exactly what is missing and how to
+# finish the installation. Probing uses ``find_spec`` — no UI module is ever
+# imported here, so the check stays instant and side-effect free.
+
+UI_IMPORT_PROBES: tuple[str, ...] = ("streamlit", "streamlit_folium", "folium", "pandas")
+
+
+class MissingUIDependencyError(RuntimeDependencyError):
+    """UI runtime modules are not installed (partial install — issue #24)."""
+
+
+def missing_ui_modules() -> list[str]:
+    """Return the UI runtime modules missing from this environment.
+
+    ``[]`` means the UI stack is importable-ready. Used by ``cli.py ui``
+    before spawning Streamlit and by ``scripts/setup_env.py``'s
+    post-install verification.
+    """
+    missing: list[str] = []
+    for module in UI_IMPORT_PROBES:
+        try:
+            if importlib.util.find_spec(module) is None:
+                missing.append(module)
+        except (ImportError, ValueError):  # pragma: no cover - malformed path entries
+            missing.append(module)
+    return missing
+
+
+def verify_ui_dependencies() -> None:
+    """Raise :class:`MissingUIDependencyError` if the UI stack is incomplete.
+
+    Never imports any UI package; safe to call from any environment (a
+    pure-engine environment will simply report the UI modules missing,
+    which is exactly the actionable message a ``cli.py ui`` user needs).
+    """
+    missing = missing_ui_modules()
+    if not missing:
+        return
+    raise MissingUIDependencyError(
+        "The Streamlit UI stack is not fully installed in this environment.\n"
+        f"Missing: {', '.join(missing)}\n"
+        "\n"
+        "This usually means the UI dependency install was interrupted\n"
+        "(e.g. a network timeout while downloading the Streamlit wheel).\n"
+        "Re-running the install is safe and loses nothing: your venv, .env\n"
+        "and database are untouched. Finish the installation with either:\n"
+        "  python scripts/setup_env.py            # resilient installer + verification\n"
+        "  pip install -r requirements-ui.txt     # plain pip (retry on timeout)\n"
+        "\n"
+        "If pip reports a *dependency conflict* instead (fastapi/starlette),\n"
+        "that is the separate issue-#3 environment-isolation problem — see\n"
+        "docs/08-local-development.md and core/dependency_guard.py."
+    )
+
+
 __all__ = [
     "InstalledMetadata",
     "MetadataSource",
+    "MissingUIDependencyError",
     "Requirement",
     "RuntimeDependencyError",
+    "UI_IMPORT_PROBES",
+    "missing_ui_modules",
     "specifier_holds",
     "verify_runtime_dependencies",
+    "verify_ui_dependencies",
 ]
