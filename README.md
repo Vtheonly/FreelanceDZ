@@ -1,4 +1,4 @@
-# FreelanceDZ Engine v3.0.0
+# FreelanceDZ Engine v3.0.1
 
 A deterministic, high-performance **B2B lead-discovery engine for the Algerian
 market**, engineered for **personal use on one powerful machine**.
@@ -12,49 +12,57 @@ SERP + schema.org extraction, freshness detection, trigram blocking,
 persistent crawl frontier). See **ARCHITECTURE.md** for the full decision
 record and measured benchmarks.
 
-```
-                        ┌────────────────────────────────────────────┐
-                        │        FastAPI + Dashboard (api/)          │
-                        └───────────────┬────────────────────────────┘
-                                        │
-                        ┌───────────────▼────────────────────────────┐
-                        │      Services (thin orchestration)         │
-                        │  DiscoveryService · CrawlerEngine · Export │
-                        └───────────────┬────────────────────────────┘
-                                        │
-      ┌─────────────────────────────────▼──────────────────────────────────┐
-      │                            ENGINE (engine/)                        │
-      │  analyzer (deterministic audit)  ·  scorer (explainable 0-100)     │
-      │  resolver (blocking → SIMD match → DSU → clusters)                 │
-      │  acquisition (token bucket · AIMD · streaming pipeline)            │
-      │  native (ctypes bridge → C++20 SIMD core, pure-Python fallbacks)   │
-      └───────┬───────────────────────────────────────────────┬────────────┘
-              │                                               │
-   ┌──────────▼──────────┐                       ┌─────────────▼─────────────┐
-   │  engine_native/     │                       │  infrastructure/          │
-   │  C++20 AVX2/AVX-512 │                       │  storage (SQLite WAL+FTS5)│
-   │  Myers Levenshtein  │                       │  scrapers (DDG, Overpass) │
-   │  trigram Jaccard    │                       │  http (pooled, per-proxy) │
-   │  SoA scoring        │                       │  resilience (proxy,backoff│
-   │  blocked Bloom      │                       │   , block detection)      │
-   │  zero-copy HTML scan│                       └───────────────────────────┘
-   └─────────────────────┘
+## Architecture
+
+```mermaid
+flowchart TD
+    UI["FastAPI + Dashboard (api/)"] --> SVC["Services — thin orchestration<br/>(services/)"]
+
+    SVC --> ENG
+    subgraph ENG["Engine (engine/)"]
+        direction LR
+        AN["analyzer<br/>deterministic audit"]
+        SC["scorer<br/>explainable 0-100"]
+        RE["resolver<br/>blocking to clusters"]
+        ACQ["acquisition<br/>token bucket, AIMD, streaming"]
+        NB["native bridge<br/>ctypes + pure-Python fallbacks"]
+    end
+
+    ENG --> CPP["engine_native/<br/>C++20 AVX2 / AVX-512 core<br/>Myers Levenshtein, trigram Jaccard,<br/>SoA scoring, blocked Bloom,<br/>zero-copy HTML scan"]
+
+    ENG --> INFRA
+    subgraph INFRA["Infrastructure (infrastructure/)"]
+        direction LR
+        STORE["storage<br/>SQLite WAL + FTS5"]
+        SCRAPE["scrapers<br/>DuckDuckGo, Overpass"]
+        HTTP["http<br/>pooled, per-proxy clients"]
+        RES["resilience<br/>backoff, block detection"]
+    end
+
+    classDef layerA fill:#e8f0fe,stroke:#5b7bd5,color:#1a2b4a
+    classDef layerB fill:#e9f7ec,stroke:#4caf6d,color:#12331d
+    classDef native fill:#fdeaea,stroke:#d9534f,color:#4a1411
+    classDef layerC fill:#fff7e0,stroke:#d9a514,color:#4a3b07
+    class UI,SVC layerA
+    class AN,SC,RE,ACQ,NB layerB
+    class CPP native
+    class STORE,SCRAPE,HTTP,RES layerC
 ```
 
 ## Quick start
 
 ```bash
-# 1. Install Python dependencies
-pip install -r requirements.txt
+# 1. Install Python dependencies (runtime + test)
+pip install -r requirements.txt -r requirements-dev.txt
 
 # 2. Build the native C++20 SIMD core (falls back to pure Python if skipped)
 bash engine_native/build.sh
 
-# 3. Run the test suite (103 tests, no network required)
+# 3. Run the test suite (107 tests, no network required)
 python -m pytest tests/ -q
 
 # 4. Start the engine + dashboard
-python main.py                      # serves http://127.0.0.1:8080
+python main.py                      # serves http://localhost:8080
 ```
 
 ### CLI
@@ -92,6 +100,96 @@ python cli.py serve --port 8080                           # API + dashboard
    frontier, per-domain politeness, AIMD adaptive concurrency, proxy
    rotation, block detection, and Bloom-filter URL dedup.
 
+```mermaid
+flowchart TD
+    Q["Seed query<br/>FR / MSA / Darja variants"] --> DDG["DuckDuckGo SERP<br/>(paginated)"]
+    Q --> OSM["OpenStreetMap<br/>Overpass API"]
+    DDG --> STREAM["Stream results as each<br/>SERP page parses (fast TTFR)"]
+    OSM --> STREAM
+    STREAM --> EXTRACT["Two-layer extraction<br/>SERP signals, then deep crawl<br/>(SIMD zero-copy scanner, JSON-LD)"]
+    EXTRACT --> DEDUP["Bloom-filter dedup +<br/>upsert-merge into leads"]
+    DEDUP --> AUDIT["Deterministic audit<br/>0-100 score, gaps, DZD pitches, FR/AR CTAs"]
+    AUDIT --> SCORE["Explainable priority score<br/>reachability + substance +<br/>opportunity deficit + freshness"]
+    SCORE --> RESOLVE["Entity resolution<br/>clusters + lineage"]
+    RESOLVE --> OUT["Dashboard + CSV/JSON export"]
+
+    classDef input fill:#e8f0fe,stroke:#5b7bd5,color:#1a2b4a
+    classDef process fill:#e9f7ec,stroke:#4caf6d,color:#12331d
+    classDef store fill:#f3eafb,stroke:#8e6bbf,color:#2c1a4a
+    class Q,DDG,OSM input
+    class STREAM,EXTRACT,DEDUP,AUDIT,SCORE,RESOLVE process
+    class OUT store
+```
+
+## Entity resolution
+
+Non-destructive by design: clustering never merges or deletes lead rows —
+membership lives in `cluster_id` + `entity_links`, so re-running resolution
+can always be undone or refined.
+
+```mermaid
+flowchart TD
+    LEADS["leads"] --> BLOCK["Trigram blocking<br/>(candidate groups)"]
+    BLOCK --> PREF{"256-bit Jaccard<br/>above prefilter threshold?"}
+    PREF -->|"no"| DISCARD["Keep records separate"]
+    PREF -->|"yes"| MYERS["Myers Levenshtein verification<br/>(bit-parallel, native SIMD)"]
+    MYERS --> COMP{"Composite score above merge<br/>threshold? (name + phone + wilaya guard)"}
+    COMP -->|"no"| DISCARD
+    COMP -->|"yes"| DSU["Union-find merge"]
+    DSU --> GOLDEN["Golden records<br/>cluster_id + lineage links"]
+
+    classDef input fill:#e8f0fe,stroke:#5b7bd5,color:#1a2b4a
+    classDef process fill:#e9f7ec,stroke:#4caf6d,color:#12331d
+    classDef decision fill:#fff7e0,stroke:#d9a514,color:#4a3b07
+    classDef store fill:#f3eafb,stroke:#8e6bbf,color:#2c1a4a
+    class LEADS input
+    class BLOCK,MYERS,DSU process
+    class PREF,COMP decision
+    class DISCARD,GOLDEN store
+```
+
+## Crawler
+
+The crawler runs N concurrent workers over a persistent SQLite frontier —
+crash-safe, resumable, and polite by construction.
+
+```mermaid
+flowchart TD
+    START["CrawlerEngine start"] --> CLAIM["Claim highest-priority URL<br/>(atomic claim, BEGIN IMMEDIATE)"]
+    CLAIM --> POLITE{"Domain polite?<br/>(per-domain token bucket)"}
+    POLITE -->|"not yet"| WAIT["Wait for domain token"]
+    WAIT --> CLAIM
+    POLITE -->|"ready"| FETCH["Fetch via pooled<br/>per-proxy client"]
+    FETCH --> BLOCKED{"Blocked or<br/>rate-limited?"}
+    BLOCKED -->|"yes"| ADAPT["Backoff + rotate proxy<br/>AIMD lowers concurrency"]
+    ADAPT --> CLAIM
+    BLOCKED -->|"no"| PARSE["Native zero-copy scan<br/>JSON-LD, phones, emails, links"]
+    PARSE --> UPSERT["Upsert-merge lead data"]
+    PARSE --> NEWURLS["Enqueue new URLs<br/>(Bloom-filter dedup)"]
+    UPSERT --> CLAIM
+    NEWURLS --> CLAIM
+
+    classDef input fill:#e8f0fe,stroke:#5b7bd5,color:#1a2b4a
+    classDef process fill:#e9f7ec,stroke:#4caf6d,color:#12331d
+    classDef decision fill:#fff7e0,stroke:#d9a514,color:#4a3b07
+    classDef adapt fill:#fdeaea,stroke:#d9534f,color:#4a1411
+    class START input
+    class CLAIM,FETCH,PARSE,UPSERT,NEWURLS,WAIT process
+    class POLITE,BLOCKED decision
+    class ADAPT adapt
+```
+
+## Upgrading from v2.0.0
+
+Existing v2.0.0 databases upgrade automatically on first start. Startup now
+reconciles legacy-shaped tables out of the way, applies the v2 baseline
+atomically (no more half-applied schema), and migration 8 consolidates the
+v1 quartet (`raw_records` + `analyses` + `lead_scores` + `resolved_entities`)
+into unified `leads` — preserving CRM status, contact flags, tags, clusters,
+attachments, and campaign history. Databases left half-migrated by the v3.0.0
+startup crash are detected and completed. Nothing to run manually; back up
+`data/leads.db` first if you want a safety net.
+
 ## Configuration
 
 All operational parameters live in `config/settings.py` (env-overridable via
@@ -126,11 +224,13 @@ engine_native/     C++20 SIMD core (one shared library, plain g++ build)
 engine/            Python engine: native bridge, analyzer, scorer, resolver,
                    acquisition (rate limiting, AIMD, streaming)
 domain/            Unified Lead model, enums, value objects
-infrastructure/    storage (schema v2, repos), scrapers, http, resilience
+infrastructure/    storage (schema v2, repos, legacy reconciliation), scrapers,
+                   http, resilience
 services/          discovery, crawler, export orchestration
 api/               FastAPI routes + dashboard
 config/            settings + static catalogs (58 wilayas, dialects, services)
 utils/             phone validator, spam filter, freshness, query sanitiser
-tests/             103 tests — no network, includes native/fallback parity
+tests/             107 tests — no network, includes native/fallback parity
+                   and the real-v2.0.0-database upgrade path
 benchmarks/        reproducible benchmark suite
 ```

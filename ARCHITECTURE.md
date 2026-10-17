@@ -37,6 +37,21 @@ resolution became non-destructive metadata: `cluster_id` on leads plus
 `entity_clusters` / `entity_links`. Migration 8 consolidates v1 databases
 (and is a no-op on fresh installs).
 
+**Legacy reconciliation (v3.0.1).** v3.0.0 crashed at startup on real v2.0.0
+databases (`no such column: lead_id`): v2.0.0's Python migrations 5-7 had
+created `lead_attachments` (keyed by `raw_record_id`) and
+`discovery_campaigns` (`limit_num` / `*_qty` columns) in shapes the v2
+baseline cannot CREATE over — and `executescript` had already autocommitted
+the statements before the failing one, leaving a half-applied schema. Fix:
+`initialise()` now (1) renames legacy-shaped tables to `legacy_<name>` before
+applying the baseline, (2) applies the baseline inside an explicit
+BEGIN/COMMIT so a failure leaves nothing behind, and (3) migration 8 folds
+legacy attachment and campaign rows into the v2 tables (mapping
+`raw_record_id` through fingerprints to new lead ids) before the v1 drops
+would CASCADE-delete them. `tests/test_legacy_upgrade.py` rebuilds a faithful
+v2.0.0 database (actual `schema_v1.sql` + the exact SQL of v2.0.0 migrations
+5-7) and covers the pristine, the half-migrated, and the re-init paths.
+
 **Streaming pipeline.** Discovery yields leads the moment each SERP page is
 parsed; audit + scoring + persistence happen per-lead while later pages are
 still in flight. The crawler runs N concurrent workers (hardware-derived,

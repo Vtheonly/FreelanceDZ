@@ -27,6 +27,17 @@ logger = logging.getLogger("storage.database")
 
 SCHEMA_FILE = Path(__file__).resolve().parent / "schema_v2.sql"
 
+# Tables whose v2.0.0 (schema-v1-era) shapes collide with the v2 baseline:
+# the baseline's CREATE TABLE IF NOT EXISTS is skipped for them, and the
+# follow-up index/trigger statements then reference columns that do not
+# exist ("no such column: lead_id"). Mapping: table -> (v2 marker column,
+# v1 marker column). Renaming preserves the rows for migration 8 to fold
+# into the fresh v2 tables.
+_LEGACY_SHAPE_TABLES: dict[str, tuple[str, str]] = {
+    "lead_attachments": ("lead_id", "raw_record_id"),          # v2.0.0 migration 7
+    "discovery_campaigns": ("target_limit", "limit_num"),     # v2.0.0 migration 5
+}
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -100,9 +111,44 @@ class DatabaseManager:
     # ------------------------------------------------------------------
     def initialise(self) -> None:
         with self._lock, self.connection() as conn:
-            conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+            self._reconcile_legacy_tables(conn)
+            # Explicit BEGIN/COMMIT makes the baseline all-or-nothing:
+            # executescript otherwise autocommits statement by statement,
+            # so a mid-script failure leaves a half-applied schema behind
+            # (exactly the v3.0.0 startup crash on v2.0.0 databases).
+            conn.executescript(
+                "BEGIN;\n" + SCHEMA_FILE.read_text(encoding="utf-8") + "\nCOMMIT;"
+            )
             self._run_migrations(conn)
             logger.info("Database ready at %s", self._db_path)
+
+    @staticmethod
+    def _reconcile_legacy_tables(conn: sqlite3.Connection) -> None:
+        """Rename legacy-shaped tables that would collide with the v2 baseline.
+
+        A v2.0.0 database carries ``lead_attachments`` keyed by
+        ``raw_record_id`` (migration 7) and ``discovery_campaigns`` with
+        ``limit_num`` / ``*_qty`` columns (migration 5). The v2 baseline
+        cannot CREATE its versions (IF NOT EXISTS skips them) and its index
+        on ``lead_attachments (lead_id)`` then fails. Renaming the legacy
+        table to ``legacy_<name>`` lets the baseline create the fresh shape;
+        migration 8 folds the legacy rows back in and drops the shell.
+        Idempotent: each table is renamed at most once, and a table that
+        already has the v2 shape (or does not exist) is left alone.
+        """
+        for table, (v2_col, v1_col) in _LEGACY_SHAPE_TABLES.items():
+            cols = {
+                r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if not cols or v2_col in cols:
+                continue
+            legacy = f"legacy_{table}"
+            logger.warning(
+                "Legacy-shaped %s table detected (has %s, v2 expects %s) — "
+                "renaming to %s for migration into schema v2",
+                table, v1_col, v2_col, legacy,
+            )
+            conn.execute(f"ALTER TABLE {table} RENAME TO {legacy}")
 
     def integrity_check(self, quick: bool = True) -> bool:
         stmt = "PRAGMA quick_check;" if quick else "PRAGMA integrity_check;"
@@ -144,6 +190,52 @@ class DatabaseManager:
 # resolved_entities) into the unified v2 `leads` schema.
 # No-op on fresh installs (detected via raw_records absence).
 # ---------------------------------------------------------------------------
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", (name,)
+    ).fetchone() is not None
+
+
+def _fold_legacy_tables(conn: sqlite3.Connection, raw_records_present: bool) -> None:
+    """Fold rows from tables renamed by ``_reconcile_legacy_tables`` into
+    their v2 counterparts, then drop the legacy shells.
+
+    Must run while ``raw_records`` still exists (attachment rows map through
+    raw_record_id -> fingerprint -> new lead id) and before the v1 tables
+    are dropped (their ON DELETE CASCADE would destroy the legacy rows).
+    When raw_records is already gone the attachment rows are unmappable and
+    are simply dropped; campaigns fold independently of raw_records.
+    """
+    if _table_exists(conn, "legacy_lead_attachments"):
+        if raw_records_present:
+            # file_path is not carried over: v2 attachments are metadata
+            # rows (file_size_bytes unknown for legacy rows -> 0).
+            conn.execute(
+                """
+                INSERT INTO lead_attachments (lead_id, filename, mime_type, file_size_bytes, created_at)
+                SELECT l.id, a.filename, a.mime_type, 0, a.created_at
+                FROM legacy_lead_attachments a
+                JOIN raw_records r ON r.id = a.raw_record_id
+                JOIN leads l ON l.fingerprint = r.fingerprint
+                """
+            )
+        conn.execute("DROP TABLE legacy_lead_attachments")
+
+    if _table_exists(conn, "legacy_discovery_campaigns"):
+        conn.execute(
+            """
+            INSERT INTO discovery_campaigns
+                (query, wilaya, target_limit, status, discovered_count, saved_count,
+                 duplicate_count, created_at, updated_at)
+            SELECT query, wilaya, limit_num, status,
+                   COALESCE(discovered_qty, 0), COALESCE(saved_qty, 0), 0,
+                   created_at, updated_at
+            FROM legacy_discovery_campaigns
+            """
+        )
+        conn.execute("DROP TABLE legacy_discovery_campaigns")
+
+
 def _ensure_entity_links_v2(conn: sqlite3.Connection) -> None:
     """Guarantee the v2 entity_links shape (cluster_id/lead_id) and indexes.
     On v1 databases the old entity_links (entity_id/raw_record_id) still
@@ -180,6 +272,9 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='raw_records'"
     ).fetchone()
     if not exists:
+        # Fresh install — nothing to consolidate, but fold/drop any legacy
+        # shells left behind by earlier (failed) initialisations.
+        _fold_legacy_tables(conn, raw_records_present=False)
         return
 
     has_is_contact = "is_contact" in {
@@ -272,6 +367,12 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         ).fetchall()
     except sqlite3.OperationalError:
         legacy_entities = []
+
+    # Fold tables renamed by the legacy reconciliation pre-pass. This must
+    # happen before the drops below: legacy lead_attachments rows reference
+    # raw_records and would be CASCADE-deleted with it, and the fold maps
+    # them through raw_records -> fingerprint -> leads.id.
+    _fold_legacy_tables(conn, raw_records_present=True)
 
     # Drop v1 artifacts. Order matters under PRAGMA foreign_keys=ON:
     # children first (analyses, lead_scores), then parents
