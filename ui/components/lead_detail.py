@@ -180,7 +180,7 @@ def _attachments(lead: dict) -> None:
                 if st.button("🗑", key=f"att_del_{att['id']}", help="Delete"):
                     try:
                         delete_attachment(att["id"])
-                        st.toast("Attachment deleted", icon="🗑")
+                        st.toast("Attachment deleted", icon="🗑️")
                         st.rerun()
                     except (EngineUnavailable, EngineError) as exc:
                         st.error(str(exc))
@@ -210,7 +210,7 @@ def _edit_expander(lead: dict) -> None:
                     "website": website or None, "address": address or None,
                     "tags": lead.get("tags") or [], "notes": notes or None,
                 })
-                st.toast("Lead updated", icon="✓")
+                st.toast("Lead updated", icon="✅")
                 st.rerun()
             except EngineError as exc:
                 st.error(f"Rejected ({exc.status}): {exc.detail}")
@@ -228,7 +228,7 @@ def _crm_actions(lead: dict) -> None:
         ):
             try:
                 set_lead_contact(lead["id"], not lead.get("is_contact", False))
-                st.toast("Contact state updated", icon="✓")
+                st.toast("Contact state updated", icon="✅")
                 st.rerun()
             except (EngineUnavailable, EngineError) as exc:
                 st.error(str(exc))
@@ -244,7 +244,7 @@ def _crm_actions(lead: dict) -> None:
         if status != lead.get("status"):
             try:
                 set_lead_status(lead["id"], status)
-                st.toast(f"Status → {status}", icon="✓")
+                st.toast(f"Status → {status}", icon="✅")
                 st.rerun()
             except (EngineUnavailable, EngineError) as exc:
                 st.error(str(exc))
@@ -273,7 +273,7 @@ def _crm_actions(lead: dict) -> None:
     if set(new_tags) != set(current):
         try:
             set_lead_tags(lead["id"], new_tags)
-            st.toast("Tags updated", icon="✓")
+            st.toast("Tags updated", icon="✅")
             st.rerun()
         except (EngineUnavailable, EngineError) as exc:
             st.error(str(exc))

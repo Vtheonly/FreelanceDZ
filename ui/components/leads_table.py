@@ -197,7 +197,7 @@ def _bulk_actions(leads: list[dict[str, Any]]) -> None:
         if st.button("★ Add to contacts", use_container_width=True):
             try:
                 result = bulk_contact(ids, True)
-                st.toast(f"{result.get('updated', 0)} leads → contacts", icon="✓")
+                st.toast(f"{result.get('updated', 0)} leads → contacts", icon="✅")
                 st.rerun()
             except (EngineUnavailable, EngineError) as exc:
                 st.error(str(exc))
@@ -205,7 +205,7 @@ def _bulk_actions(leads: list[dict[str, Any]]) -> None:
         if st.button("✕ Block (reject)", use_container_width=True):
             try:
                 result = bulk_status(ids, "rejected")
-                st.toast(f"{result.get('updated', 0)} leads rejected", icon="✕")
+                st.toast(f"{result.get('updated', 0)} leads rejected", icon="❌")
                 st.rerun()
             except (EngineUnavailable, EngineError) as exc:
                 st.error(str(exc))
@@ -213,7 +213,7 @@ def _bulk_actions(leads: list[dict[str, Any]]) -> None:
         if st.button("↺ Re-contact", use_container_width=True):
             try:
                 result = bulk_contact(ids, False)
-                st.toast(f"{result.get('updated', 0)} leads updated", icon="↺")
+                st.toast(f"{result.get('updated', 0)} leads updated", icon="🔄")
                 st.rerun()
             except (EngineUnavailable, EngineError) as exc:
                 st.error(str(exc))
@@ -271,7 +271,7 @@ def render_manual_lead_form() -> None:
                 }
                 try:
                     result = create_manual_lead(payload)
-                    st.toast(f"Lead #{result.get('lead_id')} created", icon="✓")
+                    st.toast(f"Lead #{result.get('lead_id')} created", icon="✅")
                     st.rerun()
                 except EngineError as exc:
                     st.error(f"Rejected ({exc.status}): {exc.detail}")

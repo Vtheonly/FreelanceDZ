@@ -162,7 +162,7 @@ def _engine_operations() -> None:
                 st.toast(
                     f"{report.get('output_count', 0)} entities · "
                     f"{report.get('compression_ratio', 0)}x compression",
-                    icon="✓",
+                    icon="✅",
                 )
                 st.rerun()
             except (EngineUnavailable, EngineError) as exc:

@@ -195,3 +195,116 @@ def test_checkpoint_created_through_api_appears_for_ui(engine_server):
     listed = httpx.get(f"{engine_server}/api/v2/checkpoints", params={"wilaya": "Oran"}, timeout=30)
     names = [cp["name"] for cp in listed.json()["checkpoints"]]
     assert "Oran Port Hub" in names
+
+
+# ---------------------------------------------------------------------------
+# Field-reported regressions: mutation toasts must not crash the app
+# ---------------------------------------------------------------------------
+
+
+def test_icon_literals_are_valid_emoji():
+    """Every ``icon="…"`` literal in ui/ must be a single valid emoji.
+
+    st.toast validates its icon at render time and raises
+    StreamlitAPIException otherwise — the "✓"/"✕"/"↺"/"■" text glyphs
+    crashed every mutation flow in the field (entity resolution, bulk
+    lead actions, manual lead creation, checkpoint edits, lead edits,
+    crawler start/stop).
+    """
+    import ast
+
+    from streamlit.string_util import is_emoji
+
+    checked = 0
+    for path in sorted((PROJECT_ROOT / "ui").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg != "icon" or not isinstance(kw.value, ast.Constant):
+                    continue
+                icon = kw.value.value
+                if isinstance(icon, str):
+                    assert is_emoji(icon), (
+                        f"{path.relative_to(PROJECT_ROOT)}: icon={icon!r} "
+                        "is not a single valid emoji"
+                    )
+                    checked += 1
+    assert checked >= 15, "the ui/ icon scan found suspiciously few sites"
+
+
+def test_crawler_start_flow_renders_seed_count_toast(engine_server):
+    """Start-crawl through the UI must not crash on the engine response.
+
+    Regression: the toast called ``len()`` on ``seeded_urls`` — the
+    engine returns an int count (CrawlerEngine.bootstrap), so the click
+    raised ``TypeError: object of type 'int' has no len()``.
+    """
+    at = _run_app(engine_server)
+    assert not at.exception
+
+    at.text_input(key="crawler_queries").set_value("menuiserie Alger")
+    at.button("Start crawl").click().run()
+
+    assert not at.exception, [str(e.value) for e in at.exception]
+
+
+def test_crawler_stop_flow_stops_engine_and_renders_toast(engine_server):
+    """Stop-crawl through the UI must stop the engine and not crash.
+
+    Regression: the stopping toast used the "■" text glyph as its icon —
+    StreamlitAPIException killed the app run before st.rerun().
+    """
+    import httpx
+
+    started = httpx.post(
+        f"{engine_server}/api/v2/crawler/start",
+        json={"queries": ["menuiserie Alger"]},
+        timeout=30,
+    )
+    assert started.status_code == 200, started.text
+    assert isinstance(started.json()["seeded_urls"], int)  # engine contract: a count
+
+    at = _run_app(engine_server)
+    assert not at.exception
+
+    at.button("■ Stop crawler").click().run()
+    assert not at.exception, [str(e.value) for e in at.exception]
+
+    status = httpx.get(f"{engine_server}/api/v2/crawler/status", timeout=30).json()
+    assert status["active"] is False
+
+
+def test_st_folium_kwargs_follow_installed_capability(monkeypatch):
+    """``return_on_click`` must only be passed when streamlit-folium has it.
+
+    Regression: older streamlit-folium (< 0.21) rejects the kwarg with
+    TypeError and the whole map hub degraded to the fallback table.
+    """
+    pytest.importorskip("streamlit_folium")
+
+    import streamlit_folium
+
+    from ui.components.algeria_map import _st_folium_kwargs
+
+    # Newer streamlit-folium (>= 0.21, the pinned floor): kwarg included.
+    def fake_new(fig, height=500, return_on_click=False, **kwargs):
+        return {"last_clicked": None}
+
+    monkeypatch.setattr(streamlit_folium, "st_folium", fake_new)
+    assert _st_folium_kwargs(540).get("return_on_click") is True
+
+    # Older streamlit-folium (< 0.21): kwarg must be omitted or the call
+    # dies with TypeError("unexpected keyword argument 'return_on_click'").
+    def fake_old(fig, height=500, returned_objects=None, **kwargs):
+        if "return_on_click" in kwargs:
+            raise TypeError(
+                "st_folium() got an unexpected keyword argument 'return_on_click'"
+            )
+        return {"last_clicked": None}
+
+    monkeypatch.setattr(streamlit_folium, "st_folium", fake_old)
+    kwargs = _st_folium_kwargs(540)
+    assert "return_on_click" not in kwargs
+    assert streamlit_folium.st_folium(None, **kwargs) == {"last_clicked": None}

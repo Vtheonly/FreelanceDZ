@@ -86,7 +86,7 @@ def _crawler_controls(active: bool) -> None:
         if st.button("■ Stop crawler", use_container_width=True):
             try:
                 stop_crawler()
-                st.toast("Crawler stopping…", icon="■")
+                st.toast("Crawler stopping…", icon="🛑")
                 st.rerun()
             except (EngineUnavailable, EngineError) as exc:
                 st.error(str(exc))
@@ -104,9 +104,12 @@ def _crawler_controls(active: bool) -> None:
                 else:
                     try:
                         result = start_crawler(parsed)
+                        # The engine returns seeded_urls as a COUNT of
+                        # seeded search pages (CrawlerEngine.bootstrap),
+                        # not a list — display it directly.
                         st.toast(
-                            f"Crawler running · {len(result.get('seeded_urls', []))} seeds",
-                            icon="▶",
+                            f"Crawler running · {result.get('seeded_urls', 0)} seeds",
+                            icon="▶️",
                         )
                         st.rerun()
                     except EngineError as exc:

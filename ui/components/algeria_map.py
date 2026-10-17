@@ -11,6 +11,9 @@ Architecture (isolated behind this module per refactorv5 §3):
       (compact dots) overlay the boundaries, with layer control;
     * placement: a click also seeds the checkpoint form (place a POI at the
       clicked coordinates);
+    * version tolerance: ``return_on_click`` requires streamlit-folium
+      >= 0.21 — on older installs the kwarg is omitted and clicks still
+      return ``last_clicked`` (with a rerun), so selection keeps working;
     * fallback: if the map component cannot render (no browser/component
       host), the panel degrades to a data table instead of crashing.
 
@@ -21,6 +24,7 @@ the map remains functional without external map services.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Optional
 
 import streamlit as st
@@ -89,6 +93,27 @@ def _wilaya_tooltip(feature: dict[str, Any]) -> str:
         f"<b>{props.get('code', '?')}. {props.get('name_fr', '?')} "
         f"({props.get('name_ar', '')})</b>"
     )
+
+
+def _st_folium_kwargs(height: int) -> dict[str, Any]:
+    """Kwargs for the st_folium call, tolerant of older streamlit-folium.
+
+    ``return_on_click`` (avoid reruns on bare map interaction) exists
+    only since streamlit-folium 0.21 — requirements-ui.txt pins >= 0.23,
+    but pre-existing environments may still run older versions. There
+    the kwarg is omitted: map clicks return ``last_clicked`` and trigger
+    a rerun by default, so wilaya selection keeps working.
+    """
+    from streamlit_folium import st_folium
+
+    kwargs: dict[str, Any] = {
+        "height": height,
+        "use_container_width": True,
+        "key": "algeria_map",
+    }
+    if "return_on_click" in inspect.signature(st_folium).parameters:
+        kwargs["return_on_click"] = True
+    return kwargs
 
 
 def render_map(height: int = 540) -> None:
@@ -193,13 +218,7 @@ def render_map(height: int = 540) -> None:
     folium.LayerControl(collapsed=False).add_to(m)
 
     try:
-        output = st_folium(
-            m,
-            height=height,
-            use_container_width=True,
-            return_on_click=True,
-            key="algeria_map",
-        )
+        output = st_folium(m, **_st_folium_kwargs(height))
     except Exception as exc:  # component host unavailable (headless/test)
         st.info(f"Map rendering unavailable in this environment ({exc}).")
         _fallback_table(wilaya_rows)

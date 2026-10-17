@@ -41,8 +41,11 @@ re-anchors map, leads, and checkpoints together (map click →
 - **Boundaries**: the engine's `/api/v2/geo/boundaries` GeoJSON (real
   geometry — 58 selectable polygons, not an image and not centroid
   bubbles).
-- **Interaction**: `return_on_click=True`; the click resolves to a wilaya
-  through the **engine's** `/api/v2/geo/lookup` (geographic logic stays
+- **Interaction**: `return_on_click=True` where the installed
+  streamlit-folium supports it (>= 0.21; on older installs the kwarg is
+  omitted — clicks still return `last_clicked` and trigger a rerun, so
+  selection keeps working). The click resolves to a wilaya through the
+  **engine's** `/api/v2/geo/lookup` (geographic logic stays
   server-side) — selecting the wilaya filters the whole workspace and
   seeds the checkpoint form with the clicked coordinates
   ("place a POI here").
@@ -71,6 +74,10 @@ engineered around it:
 - Per-panel failures → inline `st.error` with the API's `detail`.
 - Empty states explain the next action ("launch a discovery campaign…").
 - Mutations surface toasts; 422s render the engine's rejection reason.
+  Toast icons must be single valid emoji — text glyphs like `✓`/`■`
+  make Streamlit raise `StreamlitAPIException` at render time; every
+  `icon="…"` literal in `ui/` is scanned and validated by
+  `tests/test_ui.py::test_icon_literals_are_valid_emoji`.
 
 ## Testing
 

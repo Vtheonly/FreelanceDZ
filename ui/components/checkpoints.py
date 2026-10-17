@@ -141,7 +141,7 @@ def _render_checkpoint_list(checkpoints: list[dict[str, Any]]) -> None:
                 if new_status != cp.get("status") or new_category != cp.get("category"):
                     try:
                         update_checkpoint(cp["id"], {"status": new_status, "category": new_category})
-                        st.toast(f"{cp['name']} updated", icon="✓")
+                        st.toast(f"{cp['name']} updated", icon="✅")
                         st.rerun()
                     except (EngineUnavailable, EngineError) as exc:
                         st.error(str(exc))
