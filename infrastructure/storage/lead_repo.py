@@ -17,7 +17,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from domain.enums import DataSource, FreshnessAge, LeadStatus
+from domain.enums import DataSource, LeadStatus
 from domain.models import Lead, utcnow
 from domain.value_objects import FreshnessMetadata, PhoneDetails
 from infrastructure.storage.database import DatabaseManager

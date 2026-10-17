@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field
 from api.dependencies import get_lead_repo
 from domain.enums import LeadStatus
 from domain.models import Lead
-from domain.value_objects import PhoneDetails
 from infrastructure.storage.lead_repo import LeadRepository
 from utils.phone_validator import SmartPhoneValidator
 

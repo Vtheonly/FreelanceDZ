@@ -180,9 +180,8 @@ def _engine_operations() -> None:
 
 def _render_sidebar() -> None:
     with st.sidebar:
-        t = tokens()
         st.markdown(
-            f'<div class="sidebar-brand">FreelanceDZ <small>· geospatial workspace</small></div>',
+            '<div class="sidebar-brand">FreelanceDZ <small>· geospatial workspace</small></div>',
             unsafe_allow_html=True,
         )
         st.caption("B2B sourcing intelligence for Algeria · 58 wilayas")

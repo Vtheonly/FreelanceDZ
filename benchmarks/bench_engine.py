@@ -25,7 +25,6 @@ from engine.fastops import (  # noqa: E402
     NameMatcher,
     UrlDedup,
     extract_html,
-    levenshtein,
     score_batch,
 )
 

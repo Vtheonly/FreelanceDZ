@@ -28,12 +28,10 @@ from bs4 import BeautifulSoup
 
 from domain.enums import DataSource
 from domain.models import Lead
-from domain.value_objects import FreshnessMetadata
 from engine.fastops import extract_html
 from infrastructure.scrapers.base import BaseAsyncScraper
 from infrastructure.scrapers.content_extractor import AdvancedContentExtractor
-from utils.anti_block_engine import CrawlerAntiBlockEngine
-from utils.contact_parser import extract_first_email, extract_social_links
+from utils.contact_parser import extract_first_email
 from utils.freshness_detector import FreshnessDetector
 from utils.geo_inference import infer_wilaya_from_phone, infer_wilaya_from_text
 from utils.phone_validator import SmartPhoneValidator

@@ -18,7 +18,6 @@ from typing import AsyncIterator, Optional
 
 from domain.enums import DataSource
 from domain.models import Lead
-from domain.value_objects import FreshnessMetadata
 from infrastructure.scrapers.base import BaseAsyncScraper
 from utils.contact_parser import extract_first_email
 from utils.freshness_detector import FreshnessDetector

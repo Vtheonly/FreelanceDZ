@@ -2,6 +2,12 @@
 # FreelanceDZ v4 — Streamlit UI dependencies
 # The UI is a pure HTTP client of the engine: it deliberately does NOT
 # depend on the engine's stack (no fastapi, no storage, no scrapers).
+#
+# Local full-stack development: install BOTH files in ONE command so pip
+# resolves the shared httpx/pins together:
+#   pip install -r requirements.txt -r requirements-ui.txt -r requirements-dev.txt
+# (Installing the UI set alone can pull a starlette that fastapi 0.115
+# does not support.)
 # ============================================================
 
 streamlit>=1.41.0

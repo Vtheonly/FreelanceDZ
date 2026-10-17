@@ -9,7 +9,6 @@ handled explicitly.
 
 from __future__ import annotations
 
-from typing import Any
 
 import streamlit as st
 
@@ -18,10 +17,9 @@ from ui.api_client import (
     EngineError,
     EngineUnavailable,
     fetch_campaigns,
-    fetch_wilayas,
     launch_discovery,
 )
-from ui.theme import badge, tokens
+from ui.theme import badge
 
 _STATUS_BADGE = {
     "completed": ("ok", "✓"),
@@ -51,7 +49,7 @@ def _render_launcher() -> None:
             )
         with w_col:
             nationwide = st.checkbox("Nationwide (ignore wilaya filter)", value=False)
-            wilaya_hint = st.caption(
+            st.caption(
                 f"Wilaya filter active: {selected}" if (selected and not nationwide) else "No wilaya filter"
             )
         with l_col:
@@ -91,16 +89,16 @@ def _render_queue() -> None:
         st.caption("No sourcing history yet — launch the first campaign above.")
         return
 
-    t = tokens()
     for campaign in campaigns:
         badge_kind, icon = _STATUS_BADGE.get(campaign.get("status", ""), ("mono", "·"))
         saved = campaign.get("saved_count")
         saved_str = f"+{saved}" if saved is not None else ""
+        label = f"{icon} {campaign.get('status', '?')} {saved_str}".strip()
         st.markdown(
             f'<div class="row-item">'
             f'<span><b>{campaign.get("query", "?")}</b> · '
             f'{campaign.get("wilaya") or "Nationwide"}</span>'
-            f'<span>{badge(f"{icon} {campaign.get("status", "?")} {saved_str}", badge_kind)}</span>'
+            f'<span>{badge(label, badge_kind)}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )

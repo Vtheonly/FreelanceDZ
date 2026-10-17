@@ -20,7 +20,7 @@ from ui.api_client import (
     fetch_health,
     fetch_stats,
 )
-from ui.theme import badge, tokens
+from ui.theme import badge
 
 
 def render_diagnostics_panel() -> None:

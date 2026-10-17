@@ -22,7 +22,7 @@ from domain.enums import DataSource
 from domain.models import Lead
 from engine.resolution import EntityResolver
 from engine.resolution.canonical import CanonicalBuilder
-from engine.resolution.classifier import DISTINCT, RELATED, SAME, UNRESOLVED
+from engine.resolution.classifier import DISTINCT, SAME
 from engine.resolution.features import extract_features, name_key, phone_digits
 
 

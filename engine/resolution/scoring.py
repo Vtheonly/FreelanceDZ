@@ -113,6 +113,6 @@ class EvidenceScorer:
         name_sims: Iterable[float],
     ) -> list[PairEvidence]:
         return [
-            self.score(features[a], features[b], sim, pair)
+            self.score(features[pair[0]], features[pair[1]], sim, pair)
             for pair, sim in zip(pairs, name_sims)
         ]

@@ -21,7 +21,7 @@ from ui.api_client import (
     fetch_checkpoints,
     update_checkpoint,
 )
-from ui.theme import badge, tokens
+from ui.theme import badge
 
 CATEGORIES = ["prospect", "client", "partner", "hub", "competitor"]
 STATUSES = ["active", "visited", "archived"]
@@ -110,7 +110,6 @@ def _render_create_form(checkpoints: list[dict[str, Any]]) -> None:
 
 
 def _render_checkpoint_list(checkpoints: list[dict[str, Any]]) -> None:
-    t = tokens()
     for cp in checkpoints:
         color = {
             "prospect": "info", "client": "ok", "partner": "warn",
@@ -148,7 +147,7 @@ def _render_checkpoint_list(checkpoints: list[dict[str, Any]]) -> None:
                         st.error(str(exc))
             with delete_col:
                 st.markdown(
-                    f'<div style="height:24px"></div>', unsafe_allow_html=True
+                    '<div style="height:24px"></div>', unsafe_allow_html=True
                 )
                 if st.button("Delete", key=f"cp_del_{cp['id']}", use_container_width=True):
                     try:

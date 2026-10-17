@@ -9,7 +9,7 @@ exports stream through the engine's export endpoints.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -23,7 +23,6 @@ from ui.api_client import (
     export_bytes,
     fetch_leads,
 )
-from ui.theme import panel_header
 
 PAGE_SIZE = 25
 

@@ -23,7 +23,6 @@ from __future__ import annotations
 import logging
 from urllib.parse import urlparse
 
-from utils.url_utils import domain_of
 
 
 _logger = logging.getLogger("utils.spam_filter")

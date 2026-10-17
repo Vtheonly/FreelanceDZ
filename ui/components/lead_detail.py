@@ -24,7 +24,7 @@ from ui.api_client import (
     set_lead_tags,
     upload_attachment,
 )
-from ui.theme import badge, tokens
+from ui.theme import tokens
 
 _STATUS_CHOICES = ["discovered", "analyzed", "scored", "contacted", "verified", "rejected"]
 

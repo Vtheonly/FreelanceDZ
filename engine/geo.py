@@ -26,7 +26,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
-from config.wilayas import ALGERIA_BBOX, WILAYAS, get_wilaya_by_code, get_wilaya_by_name
+from config.wilayas import ALGERIA_BBOX, WILAYAS, get_wilaya_by_name
 
 logger = logging.getLogger("engine.geo")
 

@@ -369,7 +369,6 @@ class ResolutionService:
         never re-merge them. Source lead rows are never modified.
         """
         current = await self._clusters.member_lead_ids(cluster_id)
-        current_set = set(current)
         flat = [lid for g in groups for lid in g]
         if not groups or any(not g for g in groups):
             raise ValueError("every split group must be non-empty")

@@ -166,7 +166,6 @@ def test_ui_shows_seeded_lead_in_matrix(engine_server):
 
 def test_map_panel_data_comes_from_engine(engine_server):
     """The boundary + catalogue payloads the map consumes round-trip."""
-    import httpx
 
     with TestClient(create_app()) as client:
         boundaries = client.get("/api/v2/geo/boundaries").json()

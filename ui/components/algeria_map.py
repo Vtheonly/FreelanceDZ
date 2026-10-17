@@ -287,7 +287,6 @@ def _fallback_table(wilaya_rows: list[dict[str, Any]]) -> None:
 def render_wilaya_inspector() -> None:
     """Detail panel for the currently selected wilaya."""
     rows = st.session_state.get("_wilaya_rows_cache") or []
-    code = st.session_state.get(state.SELECTED_WILAYA_CODE)
     name = st.session_state.get(state.SELECTED_WILAYA)
     if not name:
         st.caption("Click a wilaya on the map (or choose one in the sidebar) to inspect it.")
