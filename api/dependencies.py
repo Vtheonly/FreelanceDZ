@@ -6,6 +6,7 @@ from fastapi import Request
 
 from config.settings import AppSettings, get_settings
 from engine.analyzer import BusinessAnalyzer
+from engine.geo import WilayaGeoService
 from engine.resolver import GraphEntityResolver
 from engine.scorer import LeadScorer
 from infrastructure.http import HttpClientFactory
@@ -13,6 +14,7 @@ from infrastructure.resilience import ProxyOrchestrator
 from infrastructure.scrapers.duckduckgo import DuckDuckGoScraper
 from infrastructure.scrapers.overpass import OverpassScraper
 from infrastructure.storage import (
+    CheckpointRepository,
     ClusterRepository,
     CrawlQueueRepository,
     DatabaseManager,
@@ -55,6 +57,16 @@ def get_crawl_queue(request: Request) -> CrawlQueueRepository:
     )
 
 
+def get_checkpoint_repo(request: Request) -> CheckpointRepository:
+    return _get_or_create(
+        request, "checkpoint_repo", lambda: CheckpointRepository(get_database(request))
+    )
+
+
+def get_geo_service(request: Request) -> WilayaGeoService:
+    return _get_or_create(request, "geo_service", WilayaGeoService.get)
+
+
 def get_http_client(request: Request):
     return _get_or_create(request, "http_client", HttpClientFactory.get_client)
 
@@ -68,6 +80,10 @@ def get_aggregator(request: Request) -> ScraperAggregator:
             scrapers.append(DuckDuckGoScraper(client))
         if settings.ENABLE_OVERPASS_SCRAPER:
             scrapers.append(OverpassScraper(client))
+        if settings.SEARXNG_URL:
+            from infrastructure.scrapers.searxng import SearxngScraper
+
+            scrapers.append(SearxngScraper(client, settings.SEARXNG_URL))
         return ScraperAggregator(scrapers)
 
     return _get_or_create(request, "aggregator", _build)

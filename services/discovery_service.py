@@ -1,8 +1,22 @@
 """Streaming discovery orchestration.
 
-Pipeline (TTFR-optimized — iteration 4's core insight):
-    query -> dialect expansion (offline) -> scrapers streamed concurrently
-    -> per-lead deterministic audit + scoring (native batch) -> upsert.
+Pipeline (TTFR-optimized):
+    query -> dialect expansion (offline, capped) -> all (variant x scraper)
+    streams dispatched CONCURRENTLY -> per-lead deterministic audit +
+    scoring -> upsert.
+
+v4 Task 11 — the dialect-multiplier bomb is defused on two axes:
+    1. the variant list is capped at ``DISCOVERY_MAX_VARIANTS`` (default 2:
+       the primary query + its strongest regional counterpart) instead of
+       fanning 11 sequential variants;
+    2. the remaining variants are dispatched in PARALLEL with every
+       scraper — the first result of ANY stream is yielded immediately, so
+       time-to-first-result is bound by the fastest source, not the sum of
+       all of them.
+
+v4 Task 8 — OpenStreetMap is an asymmetric oracle: its failures degrade
+    silently (per-scraper pump isolation) and it no longer requires a
+    wilaya (country-wide bbox fallback in the scraper itself).
 
 Leads are persisted as they stream in; the campaign record reflects
 created vs merged counts accurately (fixing v2's duplicate accounting,
@@ -101,9 +115,14 @@ class DiscoveryService:
         self, query: str, wilaya: Optional[str] = None, limit: int = 30
     ) -> AsyncIterator[Lead]:
         """Audit + score every streamed candidate before yielding it."""
-        variants = await self._expander.expand(query)
-        if not variants:
+        all_variants = await self._expander.expand(query)
+        if not all_variants:
             return
+
+        # v4 Task 11: primary variant + strongest regional counterpart only.
+        from config.settings import get_settings
+        max_variants = get_settings().DISCOVERY_MAX_VARIANTS
+        variants = all_variants[:max_variants]
 
         async for lead in self._aggregator.stream_discover(variants, wilaya, limit):
             audit = self._analyzer.audit(lead)
@@ -121,8 +140,10 @@ class DiscoveryService:
 class ScraperAggregator:
     """Coordinates every enabled scraper concurrently over query variants.
 
-    Exhaustive pagination is preserved from v2.0.0: variants are cycled
-    until the limit is met or all sources are dry.
+    v4 Task 11: ALL (variant x scraper) streams start simultaneously and
+    fan-in through one queue — results are yielded as they arrive from
+    whichever source is fastest. Exhaustive pagination per source is
+    preserved; variants are capped upstream by ``DiscoveryService``.
     """
 
     def __init__(self, scrapers: list) -> None:
@@ -137,59 +158,54 @@ class ScraperAggregator:
         wilaya: Optional[str],
         limit: int,
     ) -> AsyncIterator[Lead]:
-        if not self._scrapers:
+        if not self._scrapers or not variants:
             return
 
         seen: set[str] = set()
         yielded = 0
+        over_fetch = max(limit * 2, limit + 5)
 
-        for variant in variants:
-            if yielded >= limit:
-                break
-            over_fetch = max(limit * 2, limit + 5)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
 
-            tasks = {
-                scraper.source_name: scraper.stream_discover(
-                    variant, wilaya=wilaya, limit=over_fetch
-                )
-                for scraper in self._scrapers
-            }
-
-            # Fan-in: consume every scraper's stream as results arrive.
-            queue: asyncio.Queue = asyncio.Queue(maxsize=256)
-
-            async def pump(name: str, stream) -> None:
-                try:
-                    async for lead in stream:
-                        await queue.put((name, lead))
-                except Exception as exc:  # one scraper failing must not kill the rest
-                    logger.warning("Scraper %s failed on %r: %s", name, variant, exc)
-                finally:
-                    await queue.put((name, None))
-
-            pumps = [
-                asyncio.create_task(pump(name, stream), name=f"pump-{name}")
-                for name, stream in tasks.items()
-            ]
+        async def pump(name: str, stream) -> None:
             try:
-                finished = 0
-                while finished < len(pumps):
-                    name, lead = await queue.get()
-                    if lead is None:
-                        finished += 1
-                        continue
-                    fp = lead.fingerprint()
-                    if fp in seen:
-                        continue
-                    seen.add(fp)
-                    yielded += 1
-                    yield lead
-                    if yielded >= limit:
-                        break
+                async for lead in stream:
+                    await queue.put((name, lead))
+            except Exception as exc:  # one scraper failing must not kill the rest
+                logger.warning("Scraper %s failed: %s", name, exc)
             finally:
-                for task in pumps:
-                    task.cancel()
-                await asyncio.gather(*pumps, return_exceptions=True)
+                await queue.put((name, None))
+
+        # Fan-out: every scraper x every variant, all in flight at once.
+        pumps = [
+            asyncio.create_task(
+                pump(scraper.source_name, scraper.stream_discover(
+                    variant, wilaya=wilaya, limit=over_fetch
+                )),
+                name=f"pump-{scraper.source_name}-{i}",
+            )
+            for i, variant in enumerate(variants)
+            for scraper in self._scrapers
+        ]
+        try:
+            finished = 0
+            while finished < len(pumps):
+                name, lead = await queue.get()
+                if lead is None:
+                    finished += 1
+                    continue
+                fp = lead.fingerprint()
+                if fp in seen:
+                    continue
+                seen.add(fp)
+                yielded += 1
+                yield lead
+                if yielded >= limit:
+                    break
+        finally:
+            for task in pumps:
+                task.cancel()
+            await asyncio.gather(*pumps, return_exceptions=True)
 
 
 class ResolutionService:
@@ -353,7 +369,6 @@ class ResolutionService:
         never re-merge them. Source lead rows are never modified.
         """
         current = await self._clusters.member_lead_ids(cluster_id)
-        current_set = set(current)
         flat = [lid for g in groups for lid in g]
         if not groups or any(not g for g in groups):
             raise ValueError("every split group must be non-empty")

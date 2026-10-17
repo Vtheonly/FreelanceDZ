@@ -22,7 +22,7 @@ from domain.enums import DataSource
 from domain.models import Lead
 from engine.resolution import EntityResolver
 from engine.resolution.canonical import CanonicalBuilder
-from engine.resolution.classifier import DISTINCT, RELATED, SAME, UNRESOLVED
+from engine.resolution.classifier import DISTINCT, SAME
 from engine.resolution.features import extract_features, name_key, phone_digits
 
 
@@ -378,22 +378,20 @@ def test_manual_overrides_beat_the_engine():
     assert result.decisions_same == 1
 
 
-def test_native_fallback_parity_v31():
-    """Native SIMD and pure-Python paths produce identical clusters,
-    relations, and review queues."""
-    from engine.native import NativeEngine
-
+def test_resolver_deterministic_reproducibility_v31():
+    """Two independent resolver instances produce identical clusters,
+    relations, and review queues (determinism guard; superseded the old
+    native-vs-fallback parity test when the C core was retired in v4)."""
     leads = _cafe_atlas_five() + _cafe_atlas_two_cities()
-    native_resolver = EntityResolver()
-    fallback_resolver = EntityResolver(native=NativeEngine.__new__(NativeEngine))
-    fallback_resolver._native._lib = None
+    resolver_a = EntityResolver()
+    resolver_b = EntityResolver()
 
-    g_native, r_native = native_resolver.resolve(leads)
-    g_fallback, r_fallback = fallback_resolver.resolve(leads)
+    g_a, r_a = resolver_a.resolve(leads)
+    g_b, r_b = resolver_b.resolve(leads)
 
-    assert g_native == g_fallback
-    assert r_native.relations == r_fallback.relations
-    assert r_native.review_queued == r_fallback.review_queued
+    assert g_a == g_b
+    assert r_a.relations == r_b.relations
+    assert r_a.review_queued == r_b.review_queued
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,89 @@
+# ============================================================
+# FreelanceDZ v4 — local orchestration
+#
+#   docker compose up                 # engine (8080) + streamlit ui (8501)
+#   docker compose --profile searxng up   # + optional local metasearch
+#
+# The engine owns the database and all business logic; the UI is a pure
+# API client. Services communicate only over the documented HTTP API
+# (docs/04-api-reference.md) with health-gated startup. Persistent data
+# lives in the fdz_data volume; secrets come from the environment
+# (.env — never committed).
+# ============================================================
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: docker/engine.Dockerfile
+    container_name: freelancedz-engine
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_PATH: /app/data/leads.db
+      API_HOST: 0.0.0.0
+      API_PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Optional local SearXNG metasearch (enabled with the searxng profile
+      # AND SEARXNG_URL set in .env; empty = disabled).
+      SEARXNG_URL: ${SEARXNG_URL:-}
+      # Optional proxy pool (comma-separated; empty = direct connections).
+      PROXY_LIST: ${PROXY_LIST:-}
+    volumes:
+      - fdz_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/ui.Dockerfile
+    container_name: freelancedz-ui
+    ports:
+      - "8501:8501"
+    environment:
+      ENGINE_URL: http://engine:8080
+    depends_on:
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+
+  # Optional: local metasearch aggregator (v4 §5.2). Activate with:
+  #   SEARXNG_URL=http://searxng:8080 docker compose --profile searxng up
+  searxng:
+    image: searxng/searxng:latest
+    container_name: freelancedz-searxng
+    profiles: ["searxng"]
+    ports:
+      - "8888:8080"
+    volumes:
+      - searxng_config:/etc/searxng
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+volumes:
+  fdz_data:
+  searxng_config:

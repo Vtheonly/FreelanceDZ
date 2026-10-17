@@ -169,7 +169,33 @@ def export(fmt: str, limit: int):
     asyncio.run(_run())
 
 
-@cli.command(help="Run the benchmarks (native vs fallback)")
+@cli.command(help="Start the Streamlit Dynamic Grid & Interactive Map Workspace")
+@click.option("--port", "-p", default=8501, type=int, help="Streamlit port")
+@click.option("--engine", "-e", default=None, help="Engine API base URL (default http://localhost:8080)")
+def ui(port: int, engine: Optional[str]):
+    """Launch the modern Streamlit workspace (a pure API client of the engine)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    app_path = Path(__file__).resolve().parent / "ui" / "app.py"
+    if engine:
+        os.environ["ENGINE_URL"] = engine
+    console.print(
+        f"[bold green]Starting FreelanceDZ Streamlit Workspace on "
+        f"http://localhost:{port}[/bold green] "
+        f"(engine: {os.environ.get('ENGINE_URL', 'http://localhost:8080')})"
+    )
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", str(app_path),
+        "--server.port", str(port),
+        "--server.headless", "true",
+    ]
+    raise SystemExit(subprocess.run(cmd).returncode)
+
+
+@cli.command(help="Run the benchmarks (fastops core + storage + geo)")
 def bench():
     from benchmarks.bench_engine import main
     main()

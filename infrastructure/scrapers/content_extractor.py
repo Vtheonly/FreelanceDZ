@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 

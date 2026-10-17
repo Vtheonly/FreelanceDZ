@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 from domain.enums import FreshnessAge
 from utils.freshness_detector import FreshnessDetector

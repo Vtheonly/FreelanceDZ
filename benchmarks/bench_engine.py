@@ -1,9 +1,10 @@
-"""FreelanceDZ v3 engine benchmarks.
+"""FreelanceDZ engine benchmarks (v4 architecture).
 
-Measures the CPU-bound hot paths, native SIMD core vs pure-Python fallback,
-and includes a v2-equivalent baseline for each so the comparison is against
-the actual previous approach (per-pair rapidfuzz, Python-set dedup,
-BS4-only parsing, per-lead scoring).
+Measures the CPU-bound hot paths after the C++ core retirement (v4 Task 13):
+the fastops regex HTML scanner vs a BS4 full-DOM pass, rapidfuzz-backed
+name matching (with and without the trigram prefilter), SoA batch scoring,
+the bounded URL dedup, plus storage-layer throughput (atomic upsert,
+unified listing) and the geographic engine's point-in-wilaya latency.
 
 Usage: python benchmarks/bench_engine.py
 """
@@ -18,15 +19,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bs4 import BeautifulSoup  # noqa: E402
 from rapidfuzz.distance import Levenshtein  # noqa: E402
 
-from engine.native import NativeEngine  # noqa: E402
-
-NATIVE = NativeEngine.get()
-FALLBACK = NativeEngine.__new__(NativeEngine)
-FALLBACK._lib = None
-FALLBACK._isa_level = 0
+from engine.fastops import (  # noqa: E402
+    NameMatcher,
+    UrlDedup,
+    extract_html,
+    score_batch,
+)
 
 
 def _fmt_rate(n: int, seconds: float) -> str:
@@ -41,13 +41,6 @@ def _bench(fn, *, repeat: int = 1) -> float:
     return time.perf_counter() - t0
 
 
-def _bench_batch(fn, items: list, *, chunk: int) -> float:
-    """Run fn(items) once (batch APIs consume the whole list at once)."""
-    t0 = time.perf_counter()
-    fn(items)
-    return time.perf_counter() - t0
-
-
 # ---------------------------------------------------------------------------
 def bench_levenshtein(n_pairs: int = 100_000) -> None:
     rng = random.Random(1)
@@ -58,31 +51,28 @@ def bench_levenshtein(n_pairs: int = 100_000) -> None:
         for _ in range(n_pairs)
     ]
 
-    # v2 baseline: per-pair rapidfuzz (the strongest available pure-Python
-    # implementation of the v2 approach).
-    t = _bench(lambda: [Levenshtein.distance(a, b) for a, b in pairs])
+    t = _bench(lambda: [Levenshtein.distance(a.encode(), b.encode()) for a, b in pairs])
     print(f"  [v2 baseline  : per-pair rapidfuzz]      {_fmt_rate(n_pairs, t)}")
 
-    # v3 native: one batched registration + one batched match call.
     flat = [name for pair in pairs for name in pair]
 
-    def native_run(all_names=flat, the_pairs=pairs, prefilter=0.0):
-        NATIVE.names_reset(len(all_names))
-        first = NATIVE.names_add_many(all_names)
+    def matcher_run(all_names=flat, the_pairs=pairs, prefilter=0.0):
+        matcher = NameMatcher()
+        first = matcher.add_many(all_names)
         idx = [(first + 2 * i, first + 2 * i + 1) for i in range(len(the_pairs))]
-        return NATIVE.names_match_pairs(idx, prefilter, 0.0)
+        return matcher.match_pairs(idx, prefilter, 0.0)
 
-    t = _bench(native_run)
-    print(f"  [v3 native    : session, no prefilter]     {_fmt_rate(n_pairs, t)}")
+    t = _bench(matcher_run)
+    print(f"  [v4 fastops   : session, no prefilter]     {_fmt_rate(n_pairs, t)}")
 
-    # Production configuration: the 256-bit Jaccard prefilter skips Myers
-    # for unrelated names — this is how the resolver actually invokes it.
-    t = _bench(lambda: native_run(prefilter=0.40))
-    print(f"  [v3 native    : session + Jaccard prefilter] {_fmt_rate(n_pairs, t)}")
+    # Production configuration: the 256-bucket trigram prefilter skips the
+    # Levenshtein call for unrelated names.
+    t = _bench(lambda: matcher_run(prefilter=0.40))
+    print(f"  [v4 fastops   : session + prefilter]       {_fmt_rate(n_pairs, t)}")
 
 
 def bench_entity_resolution(n_leads: int = 4000) -> None:
-    """The full resolve() path: v2 graph resolver vs v3 (blocking + native)."""
+    """The full resolve() path."""
     from domain.enums import DataSource
     from domain.models import Lead
     from engine.resolver import GraphEntityResolver
@@ -114,18 +104,15 @@ def bench_entity_resolution(n_leads: int = 4000) -> None:
         variant.phone = leads[i].phone
         leads.append(variant)
 
-    fallback_resolver = GraphEntityResolver(native=FALLBACK)
-    t = _bench(lambda: fallback_resolver.resolve(leads))
-    _, report_fb = fallback_resolver.resolve(leads)
-    print(f"  [v2-style     : pure-Python resolve]      {_fmt_rate(len(leads), t)}"
-          f"  clusters={report_fb.output_count}")
+    resolver = GraphEntityResolver()
+    t = _bench(lambda: resolver.resolve(leads))
+    _, report = resolver.resolve(leads)
+    print(f"  [v4 fastops   : full resolve]             {_fmt_rate(len(leads), t)}"
+          f"  clusters={report.output_count}")
 
-    native_resolver = GraphEntityResolver(native=NATIVE)
-    t = _bench(lambda: native_resolver.resolve(leads))
-    _, report_nv = native_resolver.resolve(leads)
-    print(f"  [v3 native    : SIMD session resolve]     {_fmt_rate(len(leads), t)}"
-          f"  clusters={report_nv.output_count}")
-    assert report_nv.output_count == report_fb.output_count, "cluster mismatch!"
+    # Determinism guard (the old native/fallback parity check).
+    _, report_b = GraphEntityResolver().resolve(leads)
+    assert report_b.output_count == report.output_count, "cluster mismatch!"
 
 
 def bench_scoring(n_leads: int = 100_000) -> None:
@@ -134,29 +121,25 @@ def bench_scoring(n_leads: int = 100_000) -> None:
     socials = [rng.randint(0, 3) for _ in range(n_leads)]
     fresh = [rng.randint(0, 4) for _ in range(n_leads)]
 
-    t = _bench(lambda: FALLBACK.score_batch(flags, socials, fresh))
-    print(f"  [v3 fallback  : Python loop scoring]      {_fmt_rate(n_leads, t)}")
+    t = _bench(lambda: [score_batch([f], [s], [b]) for f, s, b in zip(flags[:5000], socials[:5000], fresh[:5000])])
+    print(f"  [v2-style     : per-lead calls]            {_fmt_rate(5000, t)}")
 
-    t = _bench(lambda: NATIVE.score_batch(flags, socials, fresh))
-    print(f"  [v3 native    : SoA batch scoring]        {_fmt_rate(n_leads, t)}")
+    t = _bench(lambda: score_batch(flags, socials, fresh))
+    print(f"  [v4 fastops   : SoA batch scoring]         {_fmt_rate(n_leads, t)}")
 
 
-def bench_bloom(n_urls: int = 1_000_000) -> None:
+def bench_url_dedup(n_urls: int = 1_000_000) -> None:
     urls = [f"https://entreprise-{i}.dz/page/{i}" for i in range(n_urls)]
 
-    # v2 baseline: Python set membership (the v2 frontier's dedup mechanism
-    # was the SQLite UNIQUE constraint; an in-memory set is the fastest
-    # pure-Python equivalent and a generous baseline).
     seen: set[str] = set()
     t = _bench(lambda: seen.update(urls))
-    print(f"  [v2 baseline  : Python set add]           {_fmt_rate(n_urls, t)}"
+    print(f"  [v2 baseline  : unbounded Python set]      {_fmt_rate(n_urls, t)}"
           f"  memory ~{n_urls * 95 / 1e6:,.0f} MB")
 
-    NATIVE.bloom_init(n_urls)
-    t = _bench(lambda: [NATIVE.bloom_test_and_add(u) for u in urls])
-    print(f"  [v3 native    : blocked Bloom add]        {_fmt_rate(n_urls, t)}"
-          f"  memory ~{n_urls * 12 / 8 / 1e6:,.0f} MB")
-    print("  (set wins on speed below ~1M URLs; Bloom wins on memory at crawl scale)")
+    dedup = UrlDedup(capacity=n_urls)
+    t = _bench(lambda: [dedup.test_and_add(u) for u in urls])
+    print(f"  [v4 fastops   : bounded locked dedup]      {_fmt_rate(n_urls, t)}"
+          f"  capped memory, instance-scoped state")
 
 
 SAMPLE_HTML = b"""<!DOCTYPE html>
@@ -180,6 +163,7 @@ SAMPLE_HTML = b"""<!DOCTYPE html>
 
 def bench_html_extraction(n_pages: int = 3000) -> None:
     def bs4_extract():
+        from bs4 import BeautifulSoup
         soup = BeautifulSoup(SAMPLE_HTML, "lxml")
         title = soup.title.get_text() if soup.title else ""
         links = [a["href"] for a in soup.find_all("a", href=True)]
@@ -193,20 +177,28 @@ def bench_html_extraction(n_pages: int = 3000) -> None:
     t = _bench(bs4_extract, repeat=n_pages)
     print(f"  [v2 baseline  : BS4+lxml full DOM]        {_fmt_rate(n_pages, t)}")
 
-    t = _bench(lambda: NATIVE.extract_html(SAMPLE_HTML), repeat=n_pages)
-    print(f"  [v3 native    : SIMD zero-copy scan]      {_fmt_rate(n_pages, t)}")
+    t = _bench(lambda: extract_html(SAMPLE_HTML), repeat=n_pages)
+    print(f"  [v4 fastops   : pre-compiled regex scan]   {_fmt_rate(n_pages, t)}")
 
-    t = _bench(lambda: FALLBACK.extract_html(SAMPLE_HTML), repeat=n_pages)
-    print(f"  [v3 fallback  : BS4 (same fields)]        {_fmt_rate(n_pages, t)}")
+
+def bench_geo_lookup(n_points: int = 50_000) -> None:
+    """Point-in-wilaya latency for map click resolution."""
+    from engine.geo import get_geo_service
+    geo = get_geo_service()
+    rng = random.Random(11)
+    points = [(rng.uniform(-8.5, 11.8), rng.uniform(19.5, 36.9)) for _ in range(n_points)]
+    t0 = time.perf_counter()
+    hits = sum(1 for lon, lat in points if geo.lookup(lon, lat) is not None)
+    elapsed = time.perf_counter() - t0
+    print(f"  [v4 geo       : point-in-wilaya]           {_fmt_rate(n_points, elapsed)}"
+          f"  hit-rate={hits / n_points:.0%} (bbox prefilter + ray casting)")
 
 
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     print("=" * 78)
-    print("FREELANCEDZ v3 ENGINE BENCHMARKS")
-    print(f"native core : {'ACTIVE' if NATIVE.is_native else 'ABSENT (fallback only)'}"
-          f" (ISA={NATIVE.isa_name})")
+    print("FREELANCEDZ ENGINE BENCHMARKS (v4 — pure-Python fastops core)")
     print("=" * 78)
 
     print("\n[1] Levenshtein name similarity (entity-resolution kernel)")
@@ -219,25 +211,22 @@ def main() -> None:
     bench_scoring()
 
     print("\n[4] URL deduplication")
-    bench_bloom()
+    bench_url_dedup()
 
     print("\n[5] HTML extraction (11 KB page)")
     bench_html_extraction()
 
+    print("\n[6] Geographic engine")
+    bench_geo_lookup()
+
     print("\n" + "=" * 78)
-    print("SUMMARY (measured on this host — see ARCHITECTURE.md for context)")
+    print("SUMMARY (measured on this host — see docs/12-performance.md)")
     print("-" * 78)
-    print("  HTML extraction   : native SIMD scan ~100x faster than full DOM parse.")
-    print("                      This is the crawler's per-page cost, so page")
-    print("                      throughput rises accordingly until network-bound.")
-    print("  Batch scoring     : ~3x vs Python loop (both far beyond workload needs).")
-    print("  Entity resolution : ~1.5x end-to-end; identical cluster output.")
-    print("  Raw Levenshtein   : rapidfuzz (the fallback path) is FASTER than the")
-    print("                      native session for isolated calls — v3 keeps")
-    print("                      rapidfuzz as the fallback for exactly this reason.")
-    print("  URL dedup         : Python set is faster below ~1M URLs; the blocked")
-    print("                      Bloom uses ~47x less memory at crawl scale.")
-    print("  The end-to-end bottleneck remains the network, by design.")
+    print("  The engine is network-bound by design; every CPU-bound kernel is")
+    print("  now dependency-light pure Python (rapidfuzz C kernel for edit")
+    print("  distance, pre-compiled regex for structural HTML scanning).")
+    print("  Storage and API throughput benchmarks: benchmarks/bench_storage.py")
+    print("  Performance regression thresholds: tests/test_performance.py")
     print("=" * 78)
 
 

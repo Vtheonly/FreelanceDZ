@@ -17,7 +17,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Use a temp directory for test data so we never touch real data.
 os.environ.setdefault("DATABASE_PATH", str(PROJECT_ROOT / "data" / "test.db"))
-os.environ.setdefault("LLM_API_KEY", "")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 
 

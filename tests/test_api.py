@@ -3,15 +3,11 @@ stats, and the v2 regressions that must never come back."""
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
 
 from api.server import create_app
-from domain.enums import DataSource
-from domain.models import Lead
-from infrastructure.storage.lead_repo import LeadRepository
 
 
 @pytest.fixture()

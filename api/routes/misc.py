@@ -38,12 +38,23 @@ class DiscoverRequest(BaseModel):
     limit: int = Field(default=30, ge=1, le=200)
     background: bool = False
 
-    @field_validator("query", "wilaya")
+    @field_validator("query")
     @classmethod
-    def _sanitise(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
+    def _sanitise_query(cls, v: str) -> str:
         return sanitise_query(v)  # raises ValueError -> FastAPI 422
+
+    @field_validator("wilaya")
+    @classmethod
+    def _sanitise_wilaya(cls, v: Optional[str]) -> Optional[str]:
+        # v4 Task 4: an empty/blank wilaya is simply "nationwide" — the
+        # old shared validator ran sanitise_query("") and returned 422 for
+        # every dashboard search with the field left blank.
+        if not v or not v.strip():
+            return None
+        try:
+            return sanitise_query(v.strip())
+        except ValueError:
+            return None
 
 
 @discovery_router.post("")
@@ -304,6 +315,13 @@ analytics_router = APIRouter(prefix="/api/v2", tags=["analytics"])
 @analytics_router.get("/stats")
 async def stats(repo: LeadRepository = Depends(get_lead_repo)):
     return await repo.stats()
+
+
+@analytics_router.get("/tags")
+async def list_tags_alias(repo: LeadRepository = Depends(get_lead_repo)):
+    """v4 Task 3: /api/v2/tags alias — clients called the bare path and got
+    a 404 while the real route is /api/v2/leads/tags. Both now resolve."""
+    return {"tags": await repo.all_tags()}
 
 
 health_router = APIRouter(tags=["health"])
