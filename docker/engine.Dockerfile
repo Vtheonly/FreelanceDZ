@@ -1,19 +1,9 @@
 # ============================================================
-# FreelanceDZ v3 — multi-stage image
-# Stage 1 builds the C++20 SIMD native core (g++), stage 2 runs
-# the Python engine with the compiled library in place.
+# FreelanceDZ v4 — ENGINE service image
+# The core engine (API + discovery + resolution + geo) in its own
+# isolated runtime. No Streamlit, no UI code — the engine is fully
+# usable and testable without any presentation layer.
 # ============================================================
-FROM python:3.12-slim AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-COPY engine_native/ ./engine_native/
-RUN bash engine_native/build.sh /build/out
-
-# ------------------------------------------------------------
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,8 +15,16 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-COPY --from=builder /build/out/libfdz_engine.so /app/engine_native/libfdz_engine.so
+# Engine code only (the ui/ directory ships in the ui image).
+COPY api/ ./api/
+COPY config/ ./config/
+COPY core/ ./core/
+COPY domain/ ./domain/
+COPY engine/ ./engine/
+COPY infrastructure/ ./infrastructure/
+COPY services/ ./services/
+COPY utils/ ./utils/
+COPY cli.py main.py pyproject.toml ./
 
 RUN mkdir -p /app/data/logs /app/data/exports /app/data/attachments \
     && groupadd -r fdz && useradd -r -g fdz -d /app -s /sbin/nologin fdz \
@@ -34,12 +32,14 @@ RUN mkdir -p /app/data/logs /app/data/exports /app/data/attachments \
 
 ENV PYTHONUNBUFFERED=1 \
     DATABASE_PATH=/app/data/leads.db \
-    API_HOST=0.0.0.0
+    API_HOST=0.0.0.0 \
+    API_PORT=8080
 
 USER fdz
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=4).status==200 else 1)"
 
 EXPOSE 8080
+
 CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8080"]

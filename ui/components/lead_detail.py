@@ -14,11 +14,15 @@ from ui.api_client import (
     EngineError,
     EngineUnavailable,
     analyze_lead,
+    delete_attachment,
+    edit_lead,
+    fetch_attachments,
     fetch_lead,
     fetch_tags,
     set_lead_contact,
     set_lead_status,
     set_lead_tags,
+    upload_attachment,
 )
 from ui.theme import badge, tokens
 
@@ -115,7 +119,103 @@ def render_lead_inspector() -> None:
     if lead.get("notes"):
         st.caption(f"Notes: {lead['notes']}")
 
+    _attachments(lead)
+    _edit_expander(lead)
     _crm_actions(lead)
+
+
+def _attachments(lead: dict) -> None:
+    """Attachment management (migrated from the legacy dashboard)."""
+    try:
+        attachments = fetch_attachments(lead["id"])
+    except (EngineUnavailable, EngineError):
+        attachments = []
+
+    with st.expander(f"📎 Attachments ({len(attachments)})"):
+        uploaded = st.file_uploader(
+            "Upload (max 10 MiB)", key=f"upload_{lead['id']}",
+            type=["pdf", "png", "jpg", "jpeg", "webp", "txt", "csv", "md", "docx"],
+        )
+        if uploaded is not None:
+            if st.button("Send to engine", key=f"send_{lead['id']}", use_container_width=True):
+                try:
+                    result = upload_attachment(
+                        lead["id"], uploaded.name, uploaded.getvalue(),
+                        uploaded.type or "application/octet-stream",
+                    )
+                    fetch_attachments.clear()
+                    st.toast(f"Uploaded {result.get('filename', uploaded.name)}", icon="📎")
+                    st.rerun()
+                except EngineError as exc:
+                    st.error(f"Rejected ({exc.status}): {exc.detail}")
+                except (EngineUnavailable, EngineError) as exc:
+                    st.error(str(exc))
+
+        if not attachments:
+            st.caption("No attachments.")
+            return
+        for att in attachments:
+            row = st.columns([4, 1, 1])
+            with row[0]:
+                st.caption(
+                    f"{att.get('filename', '?')} · "
+                    f"{int(att.get('file_size_bytes', 0)) / 1024:.0f} KB · "
+                    f"{str(att.get('created_at', ''))[:10]}"
+                )
+            with row[1]:
+                if st.button("⬇", key=f"att_dl_{att['id']}", help="Download"):
+                    from ui.api_client import get_engine_client
+
+                    try:
+                        data, _ = get_engine_client().download(
+                            f"/api/v2/attachments/{att['id']}"
+                        )
+                        st.download_button(
+                            "save", data=data, file_name=att.get("filename", "attachment"),
+                            key=f"att_save_{att['id']}", use_container_width=True,
+                        )
+                    except (EngineUnavailable, EngineError) as exc:
+                        st.error(str(exc))
+            with row[2]:
+                if st.button("🗑", key=f"att_del_{att['id']}", help="Delete"):
+                    try:
+                        delete_attachment(att["id"])
+                        st.toast("Attachment deleted", icon="🗑")
+                        st.rerun()
+                    except (EngineUnavailable, EngineError) as exc:
+                        st.error(str(exc))
+
+
+def _edit_expander(lead: dict) -> None:
+    """Field editing (migrated from the legacy dashboard edit form)."""
+    with st.expander("✎ Edit fields"):
+        with st.form(f"edit_{lead['id']}"):
+            c1, c2 = st.columns(2)
+            with c1:
+                name = st.text_input("Name", value=lead.get("name", ""))
+                industry = st.text_input("Industry", value=lead.get("industry") or "")
+                wilaya = st.text_input("Wilaya", value=lead.get("wilaya") or "")
+                phone = st.text_input("Phone", value=lead.get("phone") or "")
+            with c2:
+                email = st.text_input("Email", value=lead.get("email") or "")
+                website = st.text_input("Website", value=lead.get("website") or "")
+                address = st.text_input("Address", value=lead.get("address") or "")
+            notes = st.text_area("Notes", value=lead.get("notes") or "", height=80)
+            submitted = st.form_submit_button("Save changes", use_container_width=True)
+        if submitted:
+            try:
+                edit_lead(lead["id"], {
+                    "name": name, "industry": industry, "wilaya": wilaya,
+                    "phone": phone or None, "email": email or None,
+                    "website": website or None, "address": address or None,
+                    "tags": lead.get("tags") or [], "notes": notes or None,
+                })
+                st.toast("Lead updated", icon="✓")
+                st.rerun()
+            except EngineError as exc:
+                st.error(f"Rejected ({exc.status}): {exc.detail}")
+            except (EngineUnavailable, EngineError) as exc:
+                st.error(str(exc))
 
 
 def _crm_actions(lead: dict) -> None:

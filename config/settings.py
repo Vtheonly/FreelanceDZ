@@ -41,10 +41,9 @@ class AppSettings(BaseSettings):
 
     # --- application ------------------------------------------------------
     APP_NAME: str = "FreelanceDZ Engine"
-    APP_VERSION: str = "3.1.0"
+    APP_VERSION: str = "4.0.0"
     API_HOST: str = "127.0.0.1"          # personal use: localhost by default
     API_PORT: int = Field(default=8080, ge=1, le=65535)
-    ENABLE_DASHBOARD: bool = True
 
     # --- logging -----------------------------------------------------------
     LOG_LEVEL: str = "INFO"

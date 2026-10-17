@@ -1,0 +1,11 @@
+# ============================================================
+# FreelanceDZ v4 — Streamlit UI dependencies
+# The UI is a pure HTTP client of the engine: it deliberately does NOT
+# depend on the engine's stack (no fastapi, no storage, no scrapers).
+# ============================================================
+
+streamlit>=1.41.0
+streamlit-folium>=0.23.0
+folium>=0.19.0
+pandas>=2.2.0
+httpx>=0.28.0

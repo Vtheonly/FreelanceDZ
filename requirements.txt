@@ -1,13 +1,11 @@
 # ============================================================
-# FreelanceDZ v3 — Production Dependencies
-# The LLM stack (openai/tiktoken) and unused helpers (tenacity,
-# python-dateutil) were removed with the deterministic analyzer.
+# FreelanceDZ v4 — Engine dependencies (API service)
+# The Streamlit UI has its own file: requirements-ui.txt
 # ============================================================
 
 # --- Web framework (async) ---
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-jinja2==3.1.5
 python-multipart==0.0.20
 
 # --- HTTP client (async, HTTP/2) ---
@@ -30,9 +28,3 @@ rich==13.9.4
 
 # --- Fuzzy string distance (entity resolution kernel) ---
 rapidfuzz==3.11.0
-
-# --- Streamlit workspace (UI service; pure API client of the engine) ---
-streamlit>=1.41.0
-streamlit-folium>=0.23.0
-folium>=0.19.0
-pandas>=2.2.0

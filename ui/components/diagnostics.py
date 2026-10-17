@@ -73,8 +73,46 @@ def _engine_card() -> None:
             f"entities: {entities.get('total_clusters', 0):,} clusters · "
             f"{entities.get('pending_review', 0):,} pending review"
         )
+        _crawler_controls(active)
     except (EngineUnavailable, EngineError) as exc:
         st.caption(f"unavailable: {str(exc)[:80]}")
+
+
+def _crawler_controls(active: bool) -> None:
+    """Crawler start/stop (migrated from the legacy dashboard)."""
+    from ui.api_client import EngineError, EngineUnavailable, start_crawler, stop_crawler
+
+    if active:
+        if st.button("■ Stop crawler", use_container_width=True):
+            try:
+                stop_crawler()
+                st.toast("Crawler stopping…", icon="■")
+                st.rerun()
+            except (EngineUnavailable, EngineError) as exc:
+                st.error(str(exc))
+    else:
+        with st.expander("▶ Start crawler"):
+            queries = st.text_input(
+                "Seed queries (comma-separated)",
+                placeholder="menuiserie Alger, boulangerie Oran",
+                key="crawler_queries",
+            )
+            if st.button("Start crawl", use_container_width=True):
+                parsed = [q.strip() for q in queries.split(",") if q.strip()]
+                if not parsed:
+                    st.error("Provide at least one query.")
+                else:
+                    try:
+                        result = start_crawler(parsed)
+                        st.toast(
+                            f"Crawler running · {len(result.get('seeded_urls', []))} seeds",
+                            icon="▶",
+                        )
+                        st.rerun()
+                    except EngineError as exc:
+                        st.error(f"Rejected ({exc.status}): {exc.detail}")
+                    except (EngineUnavailable, EngineError) as exc:
+                        st.error(str(exc))
 
 
 def _data_quality_card() -> None:

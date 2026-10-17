@@ -99,6 +99,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     if state.panel_enabled("leads"):
         st.markdown("---")
+        leads_table.render_manual_lead_form()
         col_table, col_detail = st.columns([7, 5])
         with col_table:
             _panel("🎯 Leads matrix", _scope_badge())

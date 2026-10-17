@@ -87,6 +87,16 @@ class EngineClient:
     def get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         return self.request("GET", path, params=params)
 
+    def download(self, path: str, params: Optional[dict[str, Any]] = None) -> tuple[bytes, str]:
+        """Fetch a binary attachment (CSV/JSON exports, uploaded files)."""
+        try:
+            response = self._client.get(path, params=params, timeout=_TIMEOUT)
+        except httpx.HTTPError as exc:
+            raise EngineUnavailable(f"{self.base_url}{path}: {exc}") from exc
+        if response.status_code >= 400:
+            raise EngineError(response.status_code, response.text[:200])
+        return response.content, response.headers.get("content-type", "application/octet-stream")
+
     def post(self, path: str, json: Optional[dict[str, Any]] = None,
              timeout: Optional[float] = None) -> Any:
         return self.request("POST", path, json=json, timeout=timeout)
@@ -122,6 +132,7 @@ def fetch_leads(
     wilaya: Optional[str] = None,
     status: Optional[str] = None,
     is_contact: Optional[bool] = None,
+    age_class: Optional[str] = None,
     min_score: float = 0.0,
     sort_by: str = "priority_score",
     sort_order: str = "desc",
@@ -143,6 +154,8 @@ def fetch_leads(
         params["status"] = status
     if is_contact is not None:
         params["is_contact"] = is_contact
+    if age_class:
+        params["age_class"] = age_class
     return get_engine_client().get("/api/v2/leads", params=params)
 
 
@@ -310,5 +323,87 @@ def analyze_pending(limit: int = 50) -> dict[str, Any]:
     result = get_engine_client().post(
         f"/api/v2/leads/analyze-pending?limit={limit}"
     )
+    invalidate()
+    return result
+
+
+def export_bytes(fmt: str, limit: int = 1000) -> tuple[bytes, str]:
+    """Download the leads export (csv|json) as bytes for st.download_button."""
+    return get_engine_client().download(
+        f"/api/v2/export/leads/{fmt}", params={"limit": limit}
+    )
+
+
+def create_manual_lead(payload: dict[str, Any]) -> dict[str, Any]:
+    result = get_engine_client().post("/api/v2/leads/manual", json=payload)
+    invalidate()
+    return result
+
+
+def edit_lead(lead_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    result = get_engine_client().post(f"/api/v2/leads/{lead_id}/edit", json=payload)
+    invalidate()
+    return result
+
+
+def bulk_contact(lead_ids: list[int], is_contact: bool) -> dict[str, Any]:
+    result = get_engine_client().post(
+        "/api/v2/leads/bulk-contact", json={"lead_ids": lead_ids, "is_contact": is_contact}
+    )
+    invalidate()
+    return result
+
+
+def bulk_status(lead_ids: list[int], status: str) -> dict[str, Any]:
+    result = get_engine_client().post(
+        "/api/v2/leads/bulk-status", json={"lead_ids": lead_ids, "status": status}
+    )
+    invalidate()
+    return result
+
+
+def upload_attachment(lead_id: int, filename: str, content: bytes, mime_type: str) -> dict[str, Any]:
+    client = get_engine_client()
+    try:
+        response = client._client.post(
+            f"/api/v2/leads/{lead_id}/attachments",
+            files={"file": (filename, content, mime_type)},
+        )
+    except httpx.HTTPError as exc:
+        raise EngineUnavailable(str(exc)) from exc
+    if response.status_code >= 400:
+        detail = ""
+        try:
+            detail = str(response.json().get("detail", ""))
+        except ValueError:
+            detail = response.text[:200]
+        raise EngineError(response.status_code, detail)
+    invalidate()
+    return response.json()
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def fetch_attachments(lead_id: int) -> list[dict[str, Any]]:
+    return get_engine_client().get(
+        f"/api/v2/leads/{lead_id}/attachments"
+    ).get("attachments", [])
+
+
+def delete_attachment(attachment_id: int) -> dict[str, Any]:
+    result = get_engine_client().delete(f"/api/v2/attachments/{attachment_id}")
+    fetch_attachments.clear()
+    return result
+
+
+def start_crawler(queries: list[str], wilaya: Optional[str] = None) -> dict[str, Any]:
+    result = get_engine_client().post(
+        "/api/v2/crawler/start", json={"queries": queries, "wilaya": wilaya}
+    )
+    invalidate()
+    return result
+
+
+def stop_crawler() -> dict[str, Any]:
+    result = get_engine_client().post("/api/v2/crawler/stop")
     invalidate()
     return result
