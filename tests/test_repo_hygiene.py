@@ -37,7 +37,7 @@ SRC_PACKAGES = [
 ENTRY_POINTS = {
     "main", "cli", "ui.app", "ui.api_client", "ui.state", "ui.theme",
     "api.server", "benchmarks.bench_engine", "benchmarks.bench_storage",
-    "scripts.fetch_wilaya_boundaries",
+    "scripts.fetch_wilaya_boundaries", "scripts.setup_env",
 }
 
 FORBIDDEN_IN_UI = (

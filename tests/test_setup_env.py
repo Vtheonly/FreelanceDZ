@@ -69,8 +69,7 @@ class TestPipCommand:
 # Failure mode 1: interrupted install (pip non-zero)
 # ---------------------------------------------------------------------------
 class TestPipFailure:
-    def test_interrupted_install_fails_explicitly(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "stderr", capsys.stderr)
+    def test_interrupted_install_fails_explicitly(self, capsys):
         calls = []
 
         def fake_pip(cmd):
