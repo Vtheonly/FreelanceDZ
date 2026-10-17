@@ -13,7 +13,7 @@ python-multipart==0.0.20
 # --- HTTP client (async, HTTP/2) ---
 httpx[http2]==0.28.1
 
-# --- HTML / DOM parsing (fallback path; native core is primary) ---
+# --- HTML / DOM parsing (SERP parsing + deep-profile fallback path) ---
 beautifulsoup4==4.12.3
 lxml==5.3.0
 
@@ -28,6 +28,11 @@ pydantic-settings==2.7.1
 click==8.1.8
 rich==13.9.4
 
-# --- Fuzzy string distance (fallback Levenshtein — faster than our
-#     native session for isolated calls; kept deliberately) ---
+# --- Fuzzy string distance (entity resolution kernel) ---
 rapidfuzz==3.11.0
+
+# --- Streamlit workspace (UI service; pure API client of the engine) ---
+streamlit>=1.41.0
+streamlit-folium>=0.23.0
+folium>=0.19.0
+pandas>=2.2.0

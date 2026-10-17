@@ -67,9 +67,14 @@ async def create_checkpoint(
     geo: WilayaGeoService = Depends(get_geo_service),
 ):
     # Wilaya resolution: caller-provided value wins; otherwise derive it
-    # from the real boundary geometry at these coordinates.
+    # from the real boundary geometry at these coordinates. Coastal/offshore
+    # points can fall just outside the simplified boundary — the nearest
+    # wilaya then applies (ports are the canonical checkpoint).
     wilaya = normalise_wilaya_name(payload.wilaya) if payload.wilaya else None
     derived = geo.lookup(payload.longitude, payload.latitude)
+    if derived is None:
+        nearest = geo.nearest_wilaya(payload.longitude, payload.latitude)
+        derived = nearest if nearest else None
     geometry_wilaya = derived["name_fr"] if derived else None
     if wilaya is None:
         wilaya = geometry_wilaya or ""
