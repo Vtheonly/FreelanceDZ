@@ -16,7 +16,37 @@ cp .env.example .env            # optional: adjust to taste
 ```
 
 Install all requirement files **in one command** so pip resolves the
-shared pins together (see the note in `requirements-ui.txt`).
+shared pins together. The manifests are kept mutually compatible on
+purpose: the engine pins `fastapi==0.115.14` (supports
+`starlette<0.47`), which intersects modern Streamlit's
+`starlette>=0.46` at exactly Starlette 0.46.x — so the joint install
+resolves cleanly. Never install `requirements-ui.txt` *after* the
+engine set in the same venv on an older fastapi: pip can then upgrade
+Starlette past fastapi's supported range with only a warning (the
+historical issue-#3 crash; see `core/dependency_guard.py`).
+
+### Verify the environment (issue #3)
+
+```bash
+python -m pip check                                            # whole-environment consistency
+python -m pytest tests/test_dependency_hygiene.py -q           # framework-pair regression checks
+python -c "from api.server import app; print('engine imports OK')"
+```
+
+Importing `api` runs the runtime dependency guard: if the installed
+FastAPI/Starlette/Streamlit trio is provably incompatible, you get an
+actionable `RuntimeDependencyError` — not a cryptic `TypeError` deep
+inside Starlette. `python cli.py serve` runs the same guard before
+starting Uvicorn.
+
+### Strict isolation alternative
+
+If you prefer not to share one environment, install the engine and the
+UI in **separate virtual environments** (engine: `requirements.txt` +
+`requirements-dev.txt`; UI: `requirements-ui.txt` alone — Streamlit is
+then free to pull whatever Starlette it needs). The Docker deployment
+uses exactly this isolation by construction
+([09-docker-deployment.md](09-docker-deployment.md)).
 
 ## Run
 

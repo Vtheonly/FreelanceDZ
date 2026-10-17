@@ -71,9 +71,10 @@ Everything lives in [`docs/`](docs/):
 ## Verification
 
 ```bash
-python -m pytest tests/ -q      # 230+ tests: unit, integration, API, geo, UI, performance, hygiene
+python -m pytest tests/ -q      # 260+ tests: unit, integration, API, geo, UI, performance, hygiene
 ruff check .                    # lint gate (enforced green)
 python cli.py bench             # engine benchmarks
+python -m pip check             # dependency consistency (issue #3 guard)
 ```
 
 Boundary geometry © OpenStreetMap contributors (ODbL) — see

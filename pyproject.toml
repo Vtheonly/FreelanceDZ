@@ -13,7 +13,9 @@ authors = [{name = "FreelanceDZ"}]
 keywords = ["lead-generation", "algeria", "b2b", "entity-resolution", "geospatial"]
 
 dependencies = [
-    "fastapi>=0.115.0",
+    # 0.115.14 floor: the 0.115.x patch that supports starlette<0.47, i.e.
+    # the first range intersecting modern Streamlit's starlette>=0.46 (issue #3).
+    "fastapi>=0.115.14",
     "uvicorn[standard]>=0.34.0",
     "python-multipart>=0.0.20",
     "httpx[http2]>=0.28.0",

@@ -16,7 +16,6 @@ def _bootstrap():
     """Shared runtime bootstrap: logging + DB + repos + HTTP client."""
     from config.settings import get_settings
     from core.logging_setup import configure_logging
-    from infrastructure.http import HttpClientFactory
     from infrastructure.storage import (
         ClusterRepository,
         CrawlQueueRepository,
@@ -125,6 +124,11 @@ def resolve():
 def serve(host: Optional[str], port: Optional[int]):
     import uvicorn
     from config.settings import get_settings
+    from core.dependency_guard import verify_runtime_dependencies
+
+    # Issue #3: fail fast (with the documented remediation) if pip left the
+    # environment with an incompatible FastAPI/Starlette/Streamlit trio.
+    verify_runtime_dependencies()
 
     settings = get_settings()
     bind_host = host or settings.API_HOST

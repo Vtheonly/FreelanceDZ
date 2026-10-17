@@ -3,11 +3,26 @@
 # The UI is a pure HTTP client of the engine: it deliberately does NOT
 # depend on the engine's stack (no fastapi, no storage, no scrapers).
 #
-# Local full-stack development: install BOTH files in ONE command so pip
+# Local full-stack development installs BOTH files in ONE command so pip
 # resolves the shared httpx/pins together:
 #   pip install -r requirements.txt -r requirements-ui.txt -r requirements-dev.txt
-# (Installing the UI set alone can pull a starlette that fastapi 0.115
-# does not support.)
+#
+# STARLETTE CO-INSTALL CONTRACT (issue #3):
+#   Streamlit >= 1.46 declares `starlette>=0.46` for its own webserver.
+#   The engine pins fastapi==0.115.14, whose supported range is
+#   `starlette>=0.40,<0.47` — the intersection is exactly Starlette 0.46.x,
+#   so the joint one-shot install above resolves cleanly (verified by
+#   tests/test_dependency_hygiene.py and guarded at runtime by
+#   core/dependency_guard.py).
+#   When bumping either fastapi or the streamlit floor, re-check this
+#   intersection: if the ranges stop overlapping, pip will install a
+#   starlette that breaks one side with only a warning.
+#   (fastapi 0.115.6 + streamlit 1.66 was the historical broken pair —
+#   it resolved starlette 1.8.0 and the engine died at import time.)
+#
+# Strict isolation alternative: install this file alone in a separate
+# virtualenv (or use docker compose, where the UI container has no fastapi
+# at all) — then Streamlit is free to pull whatever Starlette it wants.
 # ============================================================
 
 streamlit>=1.41.0

@@ -4,7 +4,13 @@
 # ============================================================
 
 # --- Web framework (async) ---
-fastapi==0.115.6
+# 0.115.14 is the 0.115.x patch release that adds Starlette-0.46 support
+# (range <0.47): it is what lets the single-venv dev setup co-exist with a
+# modern Streamlit (>=1.46 declares starlette>=0.46) — see requirements-ui.txt
+# and core/dependency_guard.py (issue #3). fastapi 0.115.6 capped starlette
+# <0.42, which pip silently broke whenever UI requirements were installed
+# into the same environment.
+fastapi==0.115.14
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 

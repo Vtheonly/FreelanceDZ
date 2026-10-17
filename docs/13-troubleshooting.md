@@ -1,5 +1,21 @@
 # 13 · Troubleshooting & Diagnostics
 
+## `RuntimeDependencyError` on import or `cli.py serve`
+
+The environment holds a provably incompatible framework trio — almost
+always because `requirements-ui.txt` was installed *after* the engine
+set into the same venv, letting pip upgrade Starlette past the installed
+fastapi's supported range (issue #3). The error message lists the exact
+versions and requirements. Fix:
+
+```bash
+pip install -r requirements.txt -r requirements-ui.txt -r requirements-dev.txt
+python -m pip check
+```
+
+or recreate the venv, or use separate venvs / `docker compose up`.
+Regression checks: `tests/test_dependency_hygiene.py`.
+
 ## The workspace shows "engine is unreachable"
 
 1. Is the engine running? `curl http://localhost:8080/health`
