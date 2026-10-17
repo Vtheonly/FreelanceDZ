@@ -79,13 +79,63 @@ entities_router = APIRouter(prefix="/api/v2/entities", tags=["entities"])
 
 
 @entities_router.get("/stats")
-async def entity_stats(clusters: ClusterRepository = Depends(get_cluster_repo)):
-    return {"total_clusters": await clusters.count()}
+async def entity_stats(
+    clusters: ClusterRepository = Depends(get_cluster_repo),
+    service: ResolutionService = Depends(get_resolution_service),
+):
+    return {
+        "total_clusters": await clusters.count(),
+        "pending_review": await service.pending_review_count(),
+    }
 
 
 @entities_router.post("/resolve")
 async def resolve_entities(service: ResolutionService = Depends(get_resolution_service)):
     return await service.resolve_all()
+
+
+@entities_router.get("/review")
+async def list_review_queue(
+    limit: int = Query(50, ge=1, le=200),
+    service: ResolutionService = Depends(get_resolution_service),
+):
+    """Ambiguous pairs (identities the engine could not decide) with their
+    full evidence, waiting for a human call."""
+    items = await service.review_queue(limit=limit)
+    return {"count": len(items), "items": items}
+
+
+class ReviewResolutionRequest(BaseModel):
+    decision: str = Field(pattern="^(merge|keep_separate|dismiss)$")
+
+
+@entities_router.post("/review/{item_id}/resolve")
+async def resolve_review_item(
+    item_id: int,
+    payload: ReviewResolutionRequest,
+    service: ResolutionService = Depends(get_resolution_service),
+):
+    try:
+        return await service.resolve_review(item_id, payload.decision)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class ManualMergeRequest(BaseModel):
+    cluster_ids: list[int] = Field(min_length=2)
+
+
+@entities_router.post("/merge")
+async def manual_merge(
+    payload: ManualMergeRequest,
+    service: ResolutionService = Depends(get_resolution_service),
+):
+    """Merge confirmed-duplicate clusters into one canonical entity.
+    Pinned as a manual decision so the engine never undoes it."""
+    try:
+        return await service.merge_entities(payload.cluster_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @entities_router.get("")
@@ -119,6 +169,50 @@ async def entity_lineage(
     cluster_id: int, clusters: ClusterRepository = Depends(get_cluster_repo)
 ):
     return {"lineage": await clusters.get_lineage(cluster_id)}
+
+
+@entities_router.get("/{cluster_id}/evidence")
+async def entity_evidence(
+    cluster_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    clusters: ClusterRepository = Depends(get_cluster_repo),
+):
+    """Why this entity looks the way it does: every logged decision that
+    merged, linked, or separated its member records, with per-signal
+    scores and human-readable explanations."""
+    if not await clusters.get_cluster(cluster_id):
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    return {"evidence": await clusters.get_evidence(cluster_id, limit=limit)}
+
+
+@entities_router.get("/{cluster_id}/relations")
+async def entity_relations(
+    cluster_id: int, clusters: ClusterRepository = Depends(get_cluster_repo)
+):
+    """RELATED entities (branches, franchises, shared owner) — same
+    organization, distinct businesses."""
+    if not await clusters.get_cluster(cluster_id):
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    return {"relations": await clusters.list_relations(cluster_id)}
+
+
+class SplitRequest(BaseModel):
+    groups: list[list[int]] = Field(min_length=2)
+
+
+@entities_router.post("/{cluster_id}/split")
+async def split_entity(
+    cluster_id: int,
+    payload: SplitRequest,
+    service: ResolutionService = Depends(get_resolution_service),
+):
+    """Reverse an incorrect merge: partition the cluster's members into
+    separate entities. Source records are never modified, and the split
+    is pinned so the engine will not re-merge them."""
+    try:
+        return await service.split_cluster(cluster_id, payload.groups)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------

@@ -80,6 +80,7 @@ def get_discovery_service(request: Request) -> DiscoveryService:
             repo=get_lead_repo(request),
             analyzer=BusinessAnalyzer(),
             scorer=LeadScorer(),
+            resolution=get_resolution_service(request),
         )
 
     return _get_or_create(request, "discovery_service", _build)

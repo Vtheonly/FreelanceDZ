@@ -291,6 +291,21 @@ class LeadRepository:
                 return [self._row_to_lead(r) for r in rows]
         return await asyncio.to_thread(_execute)
 
+    async def get_many(self, lead_ids: list[int]) -> list[Lead]:
+        """Fetch leads by id (order follows input; missing ids skipped)."""
+        if not lead_ids:
+            return []
+        ph = ",".join("?" for _ in lead_ids)
+
+        def _execute() -> list[Lead]:
+            with self._db.connection() as conn:
+                rows = conn.execute(
+                    f"SELECT * FROM leads WHERE id IN ({ph})", lead_ids
+                ).fetchall()
+                by_id = {r["id"]: r for r in rows}
+                return [self._row_to_lead(by_id[i]) for i in lead_ids if i in by_id]
+        return await asyncio.to_thread(_execute)
+
     async def set_cluster(self, lead_id: int, cluster_id: Optional[int]) -> None:
         def _execute() -> None:
             with self._db.connection() as conn:

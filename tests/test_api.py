@@ -195,7 +195,9 @@ def test_entity_resolution_flow(client):
     resp = client.post("/api/v2/entities/resolve")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["multi_member_clusters"] >= 1
+    # Shared phone + compatible names -> one merged entity.
+    assert body["clusters_stored"] >= 1
+    assert body["decisions"]["same"] >= 1
 
     listed = client.get("/api/v2/entities").json()["entities"]
     assert any(e["member_count"] == 2 for e in listed)
@@ -203,6 +205,14 @@ def test_entity_resolution_flow(client):
     cluster_id = next(e["id"] for e in listed if e["member_count"] == 2)
     lineage = client.get(f"/api/v2/entities/{cluster_id}/lineage").json()["lineage"]
     assert len(lineage) == 2
+
+    # v3.1: the entity carries its decision log with evidence.
+    evidence = client.get(f"/api/v2/entities/{cluster_id}/evidence").json()["evidence"]
+    assert any(e["decision"] == "same" for e in evidence)
+
+    # v3.1: canonical record exposes aliases for the name variant.
+    entity = client.get(f"/api/v2/entities/{cluster_id}").json()
+    assert entity["aliases"]
 
 
 def test_export_endpoints(client):

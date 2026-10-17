@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS entity_clusters (
     confidence        REAL NOT NULL DEFAULT 1.0,
     member_count      INTEGER NOT NULL DEFAULT 1,
     strategy          TEXT NOT NULL DEFAULT 'single',  -- single|graph_merge|manual_merge
+    aliases           TEXT NOT NULL DEFAULT '[]',   -- JSON array of name variants
+    canonical_fields  TEXT NOT NULL DEFAULT '{}',   -- per-field value + provenance + conflicts
+    evidence_summary  TEXT NOT NULL DEFAULT '{}',   -- resolution evidence (min/avg identity, signals)
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );
@@ -93,6 +96,65 @@ CREATE TABLE IF NOT EXISTS entity_links (
     linked_at      TEXT NOT NULL,
     UNIQUE (cluster_id, lead_id)
 );
+
+-- ============================================================
+--  resolution_decisions : the explainability / reversibility log.
+--  Every merge, link, and notable separation is recorded with the
+--  evidence that produced it; manual decisions (splits, merges,
+--  review resolutions) are the pinned overrides the engine must
+--  respect on later runs.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS resolution_decisions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_a       INTEGER NOT NULL,
+    lead_b       INTEGER NOT NULL,
+    decision     TEXT NOT NULL,                -- same|related|distinct|unresolved
+    relationship TEXT,                         -- branch_of|same_owner|affiliated
+    score        REAL NOT NULL DEFAULT 0.0,
+    signals      TEXT NOT NULL DEFAULT '{}',   -- full evidence JSON
+    explanation  TEXT NOT NULL DEFAULT '',
+    mode         TEXT NOT NULL DEFAULT 'batch',-- batch|incremental|manual
+    decided_by   TEXT NOT NULL DEFAULT 'engine', -- engine|manual
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_res_decisions_lead_a ON resolution_decisions (lead_a);
+CREATE INDEX IF NOT EXISTS idx_res_decisions_lead_b ON resolution_decisions (lead_b);
+CREATE INDEX IF NOT EXISTS idx_res_decisions_created ON resolution_decisions (created_at);
+
+-- ============================================================
+--  review_queue : ambiguous pairs awaiting a human decision
+-- ============================================================
+CREATE TABLE IF NOT EXISTS review_queue (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_a      INTEGER NOT NULL,
+    lead_b      INTEGER NOT NULL,
+    score       REAL NOT NULL DEFAULT 0.0,
+    evidence    TEXT NOT NULL DEFAULT '{}',   -- full evidence JSON
+    explanation TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending|merged|kept_separate|dismissed
+    created_at  TEXT NOT NULL,
+    resolved_at TEXT,
+    UNIQUE (lead_a, lead_b, status)          -- one open item per pair
+);
+CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue (status);
+
+-- ============================================================
+--  entity_relations : RELATED (same org, distinct entities) links.
+--  Branches / franchises / shared-owner businesses stay separate
+--  clusters connected through this table.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS entity_relations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_a    INTEGER NOT NULL REFERENCES entity_clusters (id) ON DELETE CASCADE,
+    cluster_b    INTEGER NOT NULL REFERENCES entity_clusters (id) ON DELETE CASCADE,
+    relationship TEXT NOT NULL,               -- branch_of|same_owner|affiliated
+    confidence   REAL NOT NULL DEFAULT 0.0,
+    explanation  TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    UNIQUE (cluster_a, cluster_b, relationship)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_relations_a ON entity_relations (cluster_a);
+CREATE INDEX IF NOT EXISTS idx_entity_relations_b ON entity_relations (cluster_b);
 
 -- ============================================================
 --  crawl_queue : persistent priority frontier for the crawler

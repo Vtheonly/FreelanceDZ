@@ -58,7 +58,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 # 2. Build the native C++20 SIMD core (falls back to pure Python if skipped)
 bash engine_native/build.sh
 
-# 3. Run the test suite (107 tests, no network required)
+# 3. Run the test suite (131 tests, no network required)
 python -m pytest tests/ -q
 
 # 4. Start the engine + dashboard
@@ -123,30 +123,70 @@ flowchart TD
 
 ## Entity resolution
 
+**Business Entity Resolution & Aggregation (v3.1)** — five records that all
+describe one restaurant (official site, Google profile, Facebook page,
+Instagram, directory listing) become **one canonical entity** with five
+source records; two restaurants that merely share a name (Café Atlas
+Algiers vs Café Atlas Oran) stay **separate**; two branches of one chain
+stay separate location-level entities **linked by a relation** instead of
+being merged.
+
 Non-destructive by design: clustering never merges or deletes lead rows —
-membership lives in `cluster_id` + `entity_links`, so re-running resolution
-can always be undone or refined.
+membership lives in `cluster_id` + `entity_links`, every decision is
+logged with its evidence (`resolution_decisions`), ambiguous pairs wait in
+a **review queue**, and human splits/merges are pinned so the engine never
+undoes them.
+
+Names are organizational evidence, never identity evidence: a shared phone,
+a matching social handle, a cross-reference (the website listing the
+Facebook page that is the other record), or co-location carry the merge;
+organizational identifiers (a chain's shared domain, a shared email domain)
+create **relations** (branch_of / same_owner) without merging locations.
 
 ```mermaid
 flowchart TD
-    LEADS["leads"] --> BLOCK["Trigram blocking<br/>(candidate groups)"]
-    BLOCK --> PREF{"256-bit Jaccard<br/>above prefilter threshold?"}
-    PREF -->|"no"| DISCARD["Keep records separate"]
-    PREF -->|"yes"| MYERS["Myers Levenshtein verification<br/>(bit-parallel, native SIMD)"]
-    MYERS --> COMP{"Composite score above merge<br/>threshold? (name + phone + wilaya guard)"}
-    COMP -->|"no"| DISCARD
-    COMP -->|"yes"| DSU["Union-find merge"]
-    DSU --> GOLDEN["Golden records<br/>cluster_id + lineage links"]
+    LEADS["leads"] --> FEAT["Feature extraction<br/>names, phones, domains, socials,<br/>addresses, geo (normalized once)"]
+    FEAT --> BLOCK["Multi-key blocking<br/>trigrams + prefix + phone +<br/>domain + social handle + wilaya"]
+    BLOCK --> PAIRS["Candidate pairs<br/>(never all x all)"]
+    PAIRS --> SIM["Name similarity<br/>(native batch: Jaccard prefilter,<br/>Myers Levenshtein + token set)"]
+    SIM --> EVID["Evidence scoring<br/>identity vs org vs conflict buckets<br/>location agreement capped"]
+    EVID --> CLS{"Classification"}
+    CLS -->|"identity >= 0.70<br/>conflict <= 0.45<br/>name >= 0.45"| SAME["SAME<br/>auto-merge"]
+    CLS -->|"org >= 0.90 +<br/>location disagreement"| REL["RELATED<br/>branch_of / same_owner"]
+    CLS -->|"total <= 0.10"| SEP["DISTINCT<br/>kept separate"]
+    CLS -->|"else"| REVIEW["UNRESOLVED<br/>review queue + full evidence"]
+    SAME --> CLUSTER["Constrained clustering<br/>must-not-link vetoes, weak edges<br/>cannot chain, contradictions logged"]
+    CLUSTER --> GOLDEN["Canonical entities<br/>aliases + per-field provenance +<br/>conflict alternatives + evidence"]
+    REL --> RELATIONS["entity_relations<br/>(linked, not merged)"]
+    REVIEW --> DECISIONS["resolution_decisions<br/>(explainability log)"]
 
     classDef input fill:#e8f0fe,stroke:#5b7bd5,color:#1a2b4a
     classDef process fill:#e9f7ec,stroke:#4caf6d,color:#12331d
     classDef decision fill:#fff7e0,stroke:#d9a514,color:#4a3b07
     classDef store fill:#f3eafb,stroke:#8e6bbf,color:#2c1a4a
+    classDef outcome fill:#fdeaea,stroke:#c05b5b,color:#4a1a1a
     class LEADS input
-    class BLOCK,MYERS,DSU process
-    class PREF,COMP decision
-    class DISCARD,GOLDEN store
+    class FEAT,BLOCK,SIM,EVID,CLUSTER process
+    class CLS decision
+    class GOLDEN,RELATIONS,DECISIONS store
+    class SAME,REL,SEP,REVIEW outcome
 ```
+
+Human-in-the-loop (all pinned against future automated runs):
+
+- `GET  /api/v2/entities/{id}/evidence` — every merge/separation decision
+  with per-signal scores and a human-readable explanation.
+- `GET  /api/v2/entities/review` — ambiguous pairs with full evidence.
+- `POST /api/v2/entities/review/{id}/resolve` — merge or keep separate.
+- `POST /api/v2/entities/{id}/split` — reverse an incorrect merge.
+- `POST /api/v2/entities/merge` — combine confirmed duplicates.
+- `GET  /api/v2/entities/{id}/relations` — branches / franchises / shared
+  ownership (related, never merged).
+
+Resolution also runs **incrementally**: after every discovery campaign,
+new records are scored only against their candidates, existing clusters
+are pre-seeded (stable ids, no re-litigated decisions), and clusters grow
+in place without creating duplicates.
 
 ## Crawler
 
@@ -208,14 +248,22 @@ run `python cli.py bench` to reproduce:
 |---|---|---|---|
 | HTML extraction (11 KB page) | 418 pages/s (BS4+lxml) | 44,147 pages/s | **~106x** |
 | Batch scoring (100k leads) | 1.15M/s (Python loop) | 3.43M/s | **~3.0x** |
-| Entity resolution (4.4k leads) | 11.6k leads/s | 18.0k leads/s | **~1.55x** |
+| Entity resolution, v3.0 path (4.4k leads) | 11.6k leads/s | 18.0k leads/s | **~1.55x** |
+| Entity resolution, v3.1 pipeline (5k adversarial leads) | — | ~515 leads/s | 9-signal evidence, 4-way classification, decision log |
 | URL dedup memory (1M URLs) | ~95 MB (Python set) | ~2 MB (blocked Bloom) | **~47x** |
 
 Honest notes: raw per-pair Levenshtein is faster in rapidfuzz than in the
 native session, so rapidfuzz remains the *fallback* implementation; the
 native core wins where batch amortization and the prefilter cascade apply.
 End-to-end throughput is network-bound by design — the CPU-bound stages are
-now fast enough that the wire is the limit.
+now fast enough that the wire is the limit. The v3.1 resolution pipeline
+does ~40x more work per pair than v3.0 (nine weighted signals vs four,
+three evidence buckets, classification, constrained clustering, evidence
+serialization); its throughput on a deliberately trigram-dense synthetic
+corpus is ~515 leads/s for a *full* batch re-resolution, while real-world
+corpora are far less collision-dense and post-campaign runs use the
+incremental path (only pairs touching new records are scored). Blocking
+keeps candidates at ~1.9% of the all-by-all pair count.
 
 ## Project layout
 
@@ -230,7 +278,8 @@ services/          discovery, crawler, export orchestration
 api/               FastAPI routes + dashboard
 config/            settings + static catalogs (58 wilayas, dialects, services)
 utils/             phone validator, spam filter, freshness, query sanitiser
-tests/             107 tests — no network, includes native/fallback parity
+tests/             131 tests — no network, includes native/fallback parity
+                   and the Café Atlas entity-resolution scenarios
                    and the real-v2.0.0-database upgrade path
 benchmarks/        reproducible benchmark suite
 ```

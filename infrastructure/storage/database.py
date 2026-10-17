@@ -421,3 +421,82 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
             conn.execute("UPDATE leads SET cluster_id = ? WHERE id = ?", (cluster_id, m["id"]))
 
     logger.info("v1 -> v2 consolidation complete")
+
+
+# ---------------------------------------------------------------------------
+# Migration 9 — entity resolution v3.1: decision log, review queue,
+# entity relations, and canonical-record columns on entity_clusters.
+#
+# The three new tables are created by the v2 baseline for fresh installs
+# (and re-created here idempotently for databases initialised before this
+# schema revision). The entity_clusters columns must be ALTERed on
+# pre-3.1 databases because the baseline's CREATE TABLE IF NOT EXISTS
+# skips an existing (old-shaped) table.
+# ---------------------------------------------------------------------------
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str,
+                   ddl_type: str, default: str) -> None:
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type} NOT NULL DEFAULT {default}"
+        )
+
+
+@DatabaseManager.register_migration(9, "entity resolution v3.1: decisions, review, relations")
+def _migrate_resolution_v31(conn: sqlite3.Connection) -> None:
+    for stmt in (
+        """
+        CREATE TABLE IF NOT EXISTS resolution_decisions (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_a       INTEGER NOT NULL,
+            lead_b       INTEGER NOT NULL,
+            decision     TEXT NOT NULL,
+            relationship TEXT,
+            score        REAL NOT NULL DEFAULT 0.0,
+            signals      TEXT NOT NULL DEFAULT '{}',
+            explanation  TEXT NOT NULL DEFAULT '',
+            mode         TEXT NOT NULL DEFAULT 'batch',
+            decided_by   TEXT NOT NULL DEFAULT 'engine',
+            created_at   TEXT NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_res_decisions_lead_a ON resolution_decisions (lead_a)",
+        "CREATE INDEX IF NOT EXISTS idx_res_decisions_lead_b ON resolution_decisions (lead_b)",
+        "CREATE INDEX IF NOT EXISTS idx_res_decisions_created ON resolution_decisions (created_at)",
+        """
+        CREATE TABLE IF NOT EXISTS review_queue (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_a      INTEGER NOT NULL,
+            lead_b      INTEGER NOT NULL,
+            score       REAL NOT NULL DEFAULT 0.0,
+            evidence    TEXT NOT NULL DEFAULT '{}',
+            explanation TEXT NOT NULL DEFAULT '',
+            status      TEXT NOT NULL DEFAULT 'pending',
+            created_at  TEXT NOT NULL,
+            resolved_at TEXT,
+            UNIQUE (lead_a, lead_b, status)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue (status)",
+        """
+        CREATE TABLE IF NOT EXISTS entity_relations (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            cluster_a    INTEGER NOT NULL REFERENCES entity_clusters (id) ON DELETE CASCADE,
+            cluster_b    INTEGER NOT NULL REFERENCES entity_clusters (id) ON DELETE CASCADE,
+            relationship TEXT NOT NULL,
+            confidence   REAL NOT NULL DEFAULT 0.0,
+            explanation  TEXT NOT NULL DEFAULT '',
+            created_at   TEXT NOT NULL,
+            UNIQUE (cluster_a, cluster_b, relationship)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_entity_relations_a ON entity_relations (cluster_a)",
+        "CREATE INDEX IF NOT EXISTS idx_entity_relations_b ON entity_relations (cluster_b)",
+    ):
+        conn.execute(stmt)
+
+    _ensure_column(conn, "entity_clusters", "aliases", "TEXT", "'[]'")
+    _ensure_column(conn, "entity_clusters", "canonical_fields", "TEXT", "'{}'")
+    _ensure_column(conn, "entity_clusters", "evidence_summary", "TEXT", "'{}'")
+
+    logger.info("entity resolution v3.1 tables ready")

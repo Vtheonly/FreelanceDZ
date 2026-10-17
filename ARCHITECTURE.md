@@ -130,9 +130,19 @@ and FR/AR CTAs deterministically in microseconds.
 - CRM status survives re-analysis and re-scoring (tested).
 - Entity resolution never mutates or deletes lead rows; clusters reuse
   existing IDs when membership is unchanged, and stale clusters are pruned
-  via `ON DELETE SET NULL`.
+  via `ON DELETE SET NULL` (v3.1: pruning is scoped to the leads the run
+  actually considered, so clusters beyond the resolution batch cap are
+  no longer destroyed).
+- v3.1 guarantees: every merge/link/separation is logged with its full
+  evidence (`resolution_decisions`); manual decisions (splits, merges,
+  review resolutions) are loaded as pinned overrides that no later
+  automated run can contradict; splitting restores the exact source
+  records because they were never modified in the first place.
 - Migration 8 is idempotent and re-runnable; the test suite builds a full
   synthetic v1 database and verifies field-level migration correctness.
+  Migration 9 (v3.1) adds the decision log, review queue and relations
+  tables with guarded column adds — idempotent on fresh and v3.0.1
+  databases alike.
 
 ## 7. Configuration policy (hardcoding audit)
 
@@ -156,15 +166,106 @@ and FR/AR CTAs deterministically in microseconds.
 - The native library must be rebuilt per platform (`bash
   engine_native/build.sh`); pure-Python fallbacks keep the engine correct
   without it.
-- Entity resolution is batch-based; incremental (streaming) resolution is
-  future work.
+- Entity resolution is no longer batch-only: v3.1 runs incrementally after
+  every discovery campaign (new records scored against their candidates
+  only, existing clusters pre-seeded). A full cross-record re-resolution
+  pass over the whole corpus remains a manual operation
+  (`POST /api/v2/entities/resolve`).
+- Cross-script (Arabic ↔ French) name matching relies on non-name signals;
+  transliteration is future work.
 - One event loop by design (personal use); multi-process serving was
   deliberately not built.
 
 ## 9. Verification
 
-- `python -m pytest tests/ -q` → **103 passed** (utils, storage v2,
-  migration, native/fallback parity, engine, resolver, API integration).
+- `python -m pytest tests/ -q` → **131 passed** (utils, storage v2,
+  migration, native/fallback parity, engine, resolver, resolution v3.1
+  scenarios, API integration).
 - `python cli.py bench` → the benchmark suite with v2-equivalent baselines
   (strongest available pure-Python implementation of each previous
   approach) and the honest summary printed inline.
+
+## 10. Entity resolution v3.1 — decision record
+
+The feature spec demanded a business-entity-resolution engine that (a)
+aggregates the five online channels of one restaurant into a single
+canonical entity, (b) never merges two businesses merely because their
+names match, (c) keeps branches/franchises of one organization separate
+but linked, (d) explains every decision, and (e) can undo its mistakes.
+
+### Why evidence buckets instead of one composite score
+
+v3.0's single composite (name 0.40 / website 0.25 / phone 0.20 / email
+0.15, one threshold) cannot express "same organization, different
+location" — a shared chain domain plus similar names scored as a merge.
+v3.1 splits every signal into three buckets:
+
+- **identity** — evidence of one physical business (shared phone,
+  matching social handle, cross-references, exact email, co-location);
+- **org** — evidence of one organization (name similarity, a chain's
+  shared domain, shared email domain, shared contact channel);
+- **conflict** — evidence against (disjoint phones, different cities,
+  disjoint verified addresses, different domains).
+
+SAME requires identity ≥ 0.70, conflict ≤ 0.45, name ≥ 0.45, and either a
+contact identifier that alone reaches the bar or explicit same-place
+evidence (pins < 200 m or address overlap ≥ 0.5). That last clause is
+what keeps blind chain-branch pairs (shared domain, pins a few km apart,
+no phones) out of auto-merge while still merging a website + Google
+profile that share a domain and an address. Location agreement is capped
+at 0.55 so two records that merely place themselves in the same
+neighbourhood can never reach the merge bar without contact corroboration
+— the "two cafés on one street" case goes to review, exactly as the spec
+requires ("shared names or generic contact details must not automatically
+establish identity").
+
+### Why not ML / embeddings
+
+The measurable failure modes are structural (shared chain domains,
+copy-pasted directory addresses, phone-format variance), and the corpus is
+small and unlabeled. Deterministic signal weights + thresholds are fully
+explainable (each decision log row carries its per-signal scores),
+debuggable by reading, and free of training/serving cost — the spec's own
+instruction: "choose the architecture based on measurable accuracy and
+performance rather than introducing machine learning where simpler,
+reliable methods are sufficient". Arabic transliteration (currently
+same-script only) is the one place embeddings might earn their keep, and
+it is deliberately deferred.
+
+### Blocking, transitivity, and contradiction handling
+
+Six blocking keys (name trigrams, type-word-stripped prefix, every E.164
+phone, registrable domain, social platform:handle, wilaya+first-token)
+replace name-only trigrams, so cross-channel duplicates with differently
+worded names still become candidates. Clustering is union-find applied in
+score order with two guards v3.0 lacked: DISTINCT decisions with conflict
+≥ 1.0 register as must-not-link constraints that veto later unions (a
+strongly-supported disagreement can never be transitively overruled), and
+edges lacking a contact identifier cannot chain through existing
+components. Both guards log their blocked edges as contradictions.
+
+### Canonical records and conflict resolution
+
+Field-level selection with provenance: names are voted (two-level —
+normalized key, then display string), factual fields rank source trust
+(manual > OSM > SERP > social) then recency then substance, and any
+disagreement is recorded as alternatives rather than overwritten. Aliases
+preserve every name variant. Cluster confidence derives from the weakest
+merge edge (v3.0 rewarded member count, which big weak clusters gamed).
+
+### Incremental mode
+
+After each campaign the resolver loads the full lead set (for blocking
+context) but scores only pairs touching new records; existing clusters
+are pre-seeded from `lead.cluster_id` so prior decisions stand and ids
+stay stable — the test suite verifies a cluster grows in place (same id,
+no duplicate cluster) as new duplicates arrive across campaigns.
+
+### Precision-first calibration trade-off (behaviour change vs v3.0)
+
+Two records sharing a name, a wilaya and nothing else were merged by v3.0
+(composite ≈ 0.66 > 0.65); v3.1 queues them for review. That is the spec's
+stated preference — an incorrect merge is a more serious error than a
+temporary duplicate — made explicit in the classifier rather than hidden
+in a weight. The review queue exists precisely so the cheap error stays
+correctable by one click.

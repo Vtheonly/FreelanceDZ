@@ -67,7 +67,7 @@ def test_fresh_schema_tables(fresh_db):
 def test_fresh_migration_recorded(fresh_db):
     with fresh_db.connection() as conn:
         rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
-    assert {r["version"] for r in rows} == {8}
+    assert {r["version"] for r in rows} == {8, 9}
 
 
 def test_double_init_idempotent(tmp_path):
@@ -75,7 +75,7 @@ def test_double_init_idempotent(tmp_path):
     DatabaseManager(tmp_path / "idem.db")  # second init
     with db.connection() as conn:
         count = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-    assert count == 1
+    assert count == 2
 
 
 # ---------------------------------------------------------------------------

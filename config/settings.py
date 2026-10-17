@@ -41,7 +41,7 @@ class AppSettings(BaseSettings):
 
     # --- application ------------------------------------------------------
     APP_NAME: str = "FreelanceDZ Engine"
-    APP_VERSION: str = "3.0.1"
+    APP_VERSION: str = "3.1.0"
     API_HOST: str = "127.0.0.1"          # personal use: localhost by default
     API_PORT: int = Field(default=8080, ge=1, le=65535)
     ENABLE_DASHBOARD: bool = True
@@ -91,11 +91,35 @@ class AppSettings(BaseSettings):
     PROXY_MIN_HEALTH: float = Field(default=20.0, ge=0.0, le=100.0)
 
     # --- entity resolution -------------------------------------------------
+    # v3.0 pipeline (kept for the compat shim + prefilter tuning):
     ENTITY_NAME_THRESHOLD: float = Field(default=0.78, ge=0.0, le=1.0)
     ENTITY_COMPOSITE_THRESHOLD: float = Field(default=0.65, ge=0.0, le=1.0)
     ENTITY_MAX_BLOCK_SIZE: int = Field(default=100, ge=2)
     ENTITY_JACCARD_PREFILTER: float = Field(default=0.40, ge=0.0, le=1.0)
     ENTITY_RESOLUTION_BATCH: int = Field(default=20_000, ge=100)
+
+    # v3.1 evidence-based entity resolution (engine/resolution/).
+    # Precision-first: a false merge is worse than a temporary duplicate,
+    # so auto-merge demands identity-level corroboration (shared phone,
+    # matching social handle, cross references, co-location) and names
+    # alone can never reach it. Ambiguous pairs land in the review queue.
+    ENTITY_MERGE_IDENTITY: float = Field(default=0.70, ge=0.0, le=3.0,
+        description="identity-evidence sum required to auto-merge a pair")
+    ENTITY_MERGE_MAX_CONFLICT: float = Field(default=0.45, ge=0.0, le=3.0,
+        description="disagreement sum above which a pair cannot auto-merge")
+    ENTITY_MERGE_MIN_NAME: float = Field(default=0.45, ge=0.0, le=1.0,
+        description="name similarity below which a pair never auto-merges")
+    ENTITY_RELATED_MIN_ORG: float = Field(default=0.90, ge=0.0, le=3.0,
+        description="organizational-evidence sum required for RELATED")
+    ENTITY_RELATED_MIN_NAME: float = Field(default=0.55, ge=0.0, le=1.0,
+        description="name similarity required for RELATED (branches etc.); "
+                    "the org-evidence bar is the real gatekeeper")
+    ENTITY_DISTINCT_TOTAL: float = Field(default=0.10, ge=-3.0, le=3.0,
+        description="total at or below which a pair is confidently distinct")
+    ENTITY_AUTO_RESOLVE: bool = Field(default=True,
+        description="run incremental resolution after each discovery campaign")
+    ENTITY_DECISION_LOG_LIMIT: int = Field(default=50_000, ge=100,
+        description="max decision rows kept per resolve run (FIFO trim)")
 
     # --- regional defaults -------------------------------------------------
     DEFAULT_WILAYA: str = "Alger"
