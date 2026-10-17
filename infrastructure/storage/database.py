@@ -1,94 +1,46 @@
-"""Database manager — connection pooling, schema bootstrap, and migrations.
+"""SQLite storage engine — WAL mode, versioned idempotent migrations.
 
-This module replaces the broken "init_schema" hack from the original
-codebase (which ran "ALTER TABLE" on every startup and polluted the
-logs with fake errors). The new design:
+v3 keeps the v2 migration-registry pattern (decorator-registered, ordered,
+recorded in schema_migrations) with schema_v2.sql as the baseline and a
+single v1->v2 consolidation migration for existing databases.
 
-* Schema is defined in a single, authoritative SQL file
-  ("schema_v1.sql") with no duplicate "CREATE TABLE" blocks.
-* Migrations are tracked in a "schema_migrations" table so we know
-  exactly which version the database is on.
-* Migrations are *idempotent* — running them twice is a no-op.
-* All errors are caught and logged at the appropriate level; the
-  "duplicate column" log spam is gone because we check
-  "PRAGMA table_info" before adding columns.
-
-The connection pool uses "sqlite3" directly (with "check_same_thread=False")
-because SQLite's WAL mode handles concurrent readers and a single writer
-efficiently. Each repository gets its own short-lived connection per
-operation, which is the recommended pattern for SQLite.
+Connection policy: per-operation connections (SQLite in WAL mode scales
+better with short-lived connections than a shared handle under contention
+from asyncio.to_thread workers; connection setup is ~10us). Every repo
+method offloads blocking work via asyncio.to_thread.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
-from config.settings import AppSettings, get_settings
-from core.exceptions import StorageError
+from config.settings import get_settings
+
+logger = logging.getLogger("storage.database")
+
+SCHEMA_FILE = Path(__file__).resolve().parent / "schema_v2.sql"
 
 
-_logger = logging.getLogger("storage.database")
-
-
-_SCHEMA_DIR = Path(__file__).resolve().parent
-_INITIAL_SCHEMA = _SCHEMA_DIR / "schema_v1.sql"
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class DatabaseManager:
-    """Owns the SQLite file and runs idempotent migrations.
+    """Thread-safe, migration-aware SQLite manager (WAL, per-op connections)."""
 
-    A single instance is shared across the application (created by
-    "api.dependencies"). Every repository receives the same
-    "DatabaseManager" and asks it for short-lived connections via the
-    "connection()" context manager.
-
-    Thread-safety
-    -------------
-    SQLite connections are not safe to share across threads, so we
-    create a *new* connection per operation. The "WAL" journal mode
-    allows concurrent readers while a write is in progress, so this
-    pattern is both safe and fast.
-    """
-
-    def __init__(
-        self,
-        db_path: Optional[Path] = None,
-        settings: Optional[AppSettings] = None,
-    ) -> None:
-        self._settings = settings or get_settings()
-        self._db_path = db_path or self._settings.resolved_db_path
+    def __init__(self, db_path: Optional[Path] = None) -> None:
+        settings = get_settings()
+        self._db_path = Path(db_path) if db_path else settings.resolved_db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._verify_writable()
         self._lock = threading.Lock()
-        self._initialised = False
         self.initialise()
-
-    def _verify_writable(self) -> None:
-        """Verify the host directory is writable before opening a connection.
-
-        Creates a probe file, writes a byte, and removes it. Raises
-        "StorageError" with a clear message if the directory is on a
-        read-only mount (common in mis-configured Docker volumes).
-        """
-        import os
-        probe = self._db_path.parent / f".deephuntr-write-probe-{os.getpid()}"
-        try:
-            probe.write_bytes(b"ok")
-            probe.unlink()
-        except OSError as exc:
-            raise StorageError(
-                f"Database directory {self._db_path.parent} is not writable: {exc}. "
-                "Check Docker volume permissions or host filesystem mount options."
-            ) from exc
-
-    # ------------------------------------------------------------------
-    #  Connection management
-    # ------------------------------------------------------------------
 
     @property
     def db_path(self) -> Path:
@@ -96,22 +48,10 @@ class DatabaseManager:
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
-        """Yield a short-lived connection with WAL and FK enabled.
-
-        Commits on clean exit, rolls back on exception. The connection
-        is always closed in the "finally" block so we never leak
-        file descriptors.
-
-        Note: we use the default "isolation_level=''" (deferred) so that
-        Python's sqlite3 module manages BEGIN/COMMIT automatically. This
-        avoids the "cannot commit - no transaction is active" error that
-        occurs when "executescript()" implicitly commits inside a
-        manually-managed transaction.
-        """
         conn = sqlite3.connect(
             str(self._db_path),
             timeout=30.0,
-            isolation_level="",  # Deferred — Python manages BEGIN/COMMIT.
+            isolation_level="",          # explicit transaction control
             check_same_thread=False,
         )
         conn.row_factory = sqlite3.Row
@@ -121,255 +61,262 @@ class DatabaseManager:
             conn.execute("PRAGMA synchronous = NORMAL;")
             yield conn
             conn.commit()
-        except sqlite3.Error as exc:
+        except Exception:
             try:
                 conn.rollback()
             except sqlite3.Error:
                 pass
-            _logger.error("SQLite error: %s", exc)
-            raise StorageError(str(exc)) from exc
+            raise
+        finally:
+            conn.close()
+
+    @contextmanager
+    def immediate_connection(self) -> Iterator[sqlite3.Connection]:
+        """Write-priority connection: BEGIN IMMEDIATE avoids the
+        SELECT-then-UPDATE race between concurrent claimants."""
+        conn = sqlite3.connect(
+            str(self._db_path),
+            timeout=30.0,
+            isolation_level=None,
+            check_same_thread=False,
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA foreign_keys = ON;")
+            conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("BEGIN IMMEDIATE;")
+            yield conn
+            conn.execute("COMMIT;")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK;")
+            except sqlite3.Error:
+                pass
+            raise
         finally:
             conn.close()
 
     # ------------------------------------------------------------------
-    #  Schema bootstrap & migrations
-    # ------------------------------------------------------------------
-
     def initialise(self) -> None:
-        """Create the schema if missing and run any pending migrations.
+        with self._lock, self.connection() as conn:
+            conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+            self._run_migrations(conn)
+            logger.info("Database ready at %s", self._db_path)
 
-        Idempotent: safe to call on every startup. The first call does
-        the work; subsequent calls are no-ops.
-        """
-        with self._lock:
-            if self._initialised:
-                return
-            self._create_schema()
-            self._run_migrations()
-            self._initialised = True
-            _logger.info("Database initialised at %s", self._db_path)
-
-    def _create_schema(self) -> None:
-        """Apply the initial schema file ("schema_v1.sql")."""
-        if not _INITIAL_SCHEMA.exists():
-            raise StorageError(f"Schema file not found: {_INITIAL_SCHEMA}")
-        schema_sql = _INITIAL_SCHEMA.read_text(encoding="utf-8")
+    def integrity_check(self, quick: bool = True) -> bool:
+        stmt = "PRAGMA quick_check;" if quick else "PRAGMA integrity_check;"
         with self.connection() as conn:
-            conn.executescript(schema_sql)
-
-    def _run_migrations(self) -> None:
-        """Run pending migrations tracked in "schema_migrations".
-
-        Each migration is a function decorated with "@migration". The
-        decorator registers the migration and its version number; this
-        method runs every registered migration whose version is greater
-        than the current database version, in order.
-        """
-        with self.connection() as conn:
-            current = self._current_version(conn)
-            for migration in _MIGRATIONS:
-                if migration.version <= current:
-                    continue
-                _logger.info("Running migration %d: %s", migration.version, migration.description)
-                migration.run(conn)
-                conn.execute(
-                    "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?);",
-                    (migration.version, migration.description, _now_iso()),
-                )
-            if _MIGRATIONS:
-                _logger.info(
-                    "Database at migration version %d (was %d)",
-                    max((m.version for m in _MIGRATIONS), default=0),
-                    current,
-                )
-
-    def _current_version(self, conn: sqlite3.Connection) -> int:
-        """Return the highest applied migration version (0 if none)."""
-        row = conn.execute(
-            "SELECT MAX(version) AS v FROM schema_migrations"
-        ).fetchone()
-        if row is None or row["v"] is None:
-            return 0
-        return int(row["v"])
-
-    # ------------------------------------------------------------------
-    #  Maintenance
-    # ------------------------------------------------------------------
-
-    def vacuum(self) -> None:
-        """Reclaim free space. Run periodically (e.g. once a week)."""
-        with self.connection() as conn:
-            conn.execute("VACUUM;")
-        _logger.info("Database vacuumed.")
-
-    def integrity_check(self) -> bool:
-        """Run "PRAGMA integrity_check" and return True if healthy."""
-        with self.connection() as conn:
-            row = conn.execute("PRAGMA integrity_check;").fetchone()
+            row = conn.execute(stmt).fetchone()
             return bool(row and row[0] == "ok")
 
+    # ------------------------------------------------------------------
+    # Migration registry
+    # ------------------------------------------------------------------
+    _MIGRATIONS: dict[int, tuple[str, Callable[[sqlite3.Connection], None]]] = {}
 
-# ============================================================
-#  Migration registry
-# ============================================================
-
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
-
-
-class _Migration:
-    """A single migration step."""
-
-    __slots__ = ("version", "description", "fn")
-
-    def __init__(self, version: int, description: str, fn) -> None:
-        self.version = version
-        self.description = description
-        self.fn = fn
-
-    def run(self, conn: sqlite3.Connection) -> None:
-        self.fn(conn)
-
-
-_MIGRATIONS: list[_Migration] = []
-
-
-def migration(version: int, description: str):
-    """Decorator that registers a function as a schema migration.
-
-    Example
-    -------
-    .. code-block:: python
-
-        @migration(2, "Add index on raw_records.source_url")
-        def _add_index(conn):
+    def _run_migrations(self, conn: sqlite3.Connection) -> None:
+        applied = {
+            int(r["version"])
+            for r in conn.execute("SELECT version FROM schema_migrations").fetchall()
+        }
+        for version in sorted(self._MIGRATIONS):
+            if version in applied:
+                continue
+            description, migrate = self._MIGRATIONS[version]
+            logger.info("Applying migration %d: %s", version, description)
+            migrate(conn)
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_raw_source_url "
-                "ON raw_records (source_url);"
+                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+                (version, description, _now_iso()),
             )
-    """
-    def decorator(fn):
-        _MIGRATIONS.append(_Migration(version, description, fn))
-        _MIGRATIONS.sort(key=lambda m: m.version)
-        return fn
-    return decorator
+
+    @classmethod
+    def register_migration(cls, version: int, description: str):
+        def decorator(fn: Callable[[sqlite3.Connection], None]) -> Callable[[sqlite3.Connection], None]:
+            cls._MIGRATIONS[version] = (description, fn)
+            return fn
+        return decorator
 
 
-# ============================================================
-#  Migrations (each one is idempotent — uses IF NOT EXISTS / IF EXISTS)
-# ============================================================
-
-@migration(1, "Initial schema (raw_records, resolved_entities, crawl_queue, analyses, lead_scores, schema_migrations)")
-def _migration_1_initial(conn: sqlite3.Connection) -> None:
-    """The initial schema is applied by "_create_schema" before migrations
-    run, so this migration is a no-op. It exists only to record version 1
-    so that future migrations have a baseline to compare against."""
-    pass
-
-
-@migration(2, "Add indexes for freshness filtering")
-def _migration_2_freshness_indexes(conn: sqlite3.Connection) -> None:
+# ---------------------------------------------------------------------------
+# Migration 8 — consolidate v1 (raw_records + analyses + lead_scores +
+# resolved_entities) into the unified v2 `leads` schema.
+# No-op on fresh installs (detected via raw_records absence).
+# ---------------------------------------------------------------------------
+def _ensure_entity_links_v2(conn: sqlite3.Connection) -> None:
+    """Guarantee the v2 entity_links shape (cluster_id/lead_id) and indexes.
+    On v1 databases the old entity_links (entity_id/raw_record_id) still
+    exists at this point; it is dropped by the consolidation below and this
+    helper runs again afterwards."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(entity_links)").fetchall()}
+    if cols and "cluster_id" not in cols:
+        conn.execute("DROP TABLE entity_links")
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_raw_records_age_class "
-        "ON raw_records (calculated_age_class);"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_raw_records_discovered_at "
-        "ON raw_records (discovered_at DESC);"
-    )
-
-
-@migration(3, "Add indexes for entity-resolution performance")
-def _migration_3_resolution_indexes(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resolved_entities_confidence "
-        "ON resolved_entities (confidence DESC);"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resolved_entities_wilaya "
-        "ON resolved_entities (wilaya);"
-    )
-
-
-@migration(4, "Add full-text search virtual table for leads")
-def _migration_4_fts(conn: sqlite3.Connection) -> None:
-    """Create an FTS5 mirror of "raw_records" for fast text search.
-
-    We use an *external-content* FTS5 table so the original rows are the
-    source of truth and the FTS index is just a fast lookup. A trigger
-    keeps the index in sync on insert/update/delete.
-    """
-    conn.executescript(
         """
-        CREATE VIRTUAL TABLE IF NOT EXISTS raw_records_fts USING fts5(
-            name, industry, wilaya, address, email,
-            content='raw_records',
-            content_rowid='id',
-            tokenize='unicode61 remove_diacritics 2'
-        );
-
-        CREATE TRIGGER IF NOT EXISTS raw_records_ai AFTER INSERT ON raw_records BEGIN
-            INSERT INTO raw_records_fts(rowid, name, industry, wilaya, address, email)
-            VALUES (new.id, new.name, new.industry, new.wilaya, new.address, new.email);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS raw_records_ad AFTER DELETE ON raw_records BEGIN
-            INSERT INTO raw_records_fts(raw_records_fts, rowid, name, industry, wilaya, address, email)
-            VALUES ('delete', old.id, old.name, old.industry, old.wilaya, old.address, old.email);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS raw_records_au AFTER UPDATE ON raw_records BEGIN
-            INSERT INTO raw_records_fts(raw_records_fts, rowid, name, industry, wilaya, address, email)
-            VALUES ('delete', old.id, old.name, old.industry, old.wilaya, old.address, old.email);
-            INSERT INTO raw_records_fts(rowid, name, industry, wilaya, address, email)
-            VALUES (new.id, new.name, new.industry, new.wilaya, new.address, new.email);
-        END;
-        """
-    )
-
-
-@migration(5, "Add discovery_campaigns table for tracking background sourcing tasks")
-def _migration_5_campaigns(conn: sqlite3.Connection) -> None:
-    """Create a persistent queue table to monitor progress of discovery campaigns in the UI."""
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS discovery_campaigns (
+        CREATE TABLE IF NOT EXISTS entity_links (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            query          TEXT NOT NULL,
-            wilaya         TEXT,
-            limit_num      INTEGER NOT NULL,
-            status         TEXT NOT NULL, -- pending|processing|completed|failed
-            discovered_qty INTEGER DEFAULT 0,
-            saved_qty      INTEGER DEFAULT 0,
-            created_at     TEXT NOT NULL,
-            updated_at     TEXT NOT NULL
-        );
+            cluster_id     INTEGER NOT NULL REFERENCES entity_clusters (id) ON DELETE CASCADE,
+            lead_id        INTEGER NOT NULL REFERENCES leads (id) ON DELETE CASCADE,
+            match_score    REAL NOT NULL DEFAULT 1.0,
+            match_reasons  TEXT NOT NULL DEFAULT '[]',
+            linked_at      TEXT NOT NULL,
+            UNIQUE (cluster_id, lead_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_links_cluster ON entity_links (cluster_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_links_lead ON entity_links (lead_id)")
+
+
+@DatabaseManager.register_migration(8, "unify v1 tables into leads (schema v2)")
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """Consolidate v1 (raw_records + analyses + lead_scores + resolved_entities)
+    into the unified v2 `leads` schema. No-op (besides index ensure) on fresh
+    installs, detected via raw_records absence."""
+    _ensure_entity_links_v2(conn)
+
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='raw_records'"
+    ).fetchone()
+    if not exists:
+        return
+
+    has_is_contact = "is_contact" in {
+        r["name"] for r in conn.execute("PRAGMA table_info(lead_scores)").fetchall()
+    }
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO leads (
+            fingerprint, name, industry, wilaya, address, website, phone, email,
+            social_links, rating, review_count, latitude, longitude, source, source_url,
+            phone_details, freshness, digital_score, gaps, recommended_services,
+            analysis_model, priority_score, score_breakdown, status, tags, is_contact,
+            notes, discovered_at, updated_at
+        )
+        SELECT
+            r.fingerprint, r.name, r.industry, r.wilaya, r.address, r.website, r.phone, r.email,
+            COALESCE(r.social_media_handles, '[]'), r.rating, r.review_count,
+            r.latitude, r.longitude, r.source, r.source_url,
+            COALESCE(r.phone_metadata, '[]'),
+            json_object(
+                'discovered_at', r.discovered_at,
+                'last_updated', r.last_updated,
+                'relative_age_hint', r.relative_age_hint,
+                'calculated_age_class', r.calculated_age_class
+            ),
+            a.digital_presence_score,
+            COALESCE(a.pain_points, '[]'),
+            COALESCE(a.recommended_solutions, '[]'),
+            a.analysis_model,
+            COALESCE(s.priority_score, 0.0),
+            COALESCE(s.score_breakdown, '{}'),
+            COALESCE(s.status, 'discovered'),
+            COALESCE(s.tags, '[]'),
+            CASE WHEN s.is_contact = 1 THEN 1 ELSE 0 END,
+            NULL,
+            r.discovered_at,
+            r.created_at
+        FROM raw_records r
+        LEFT JOIN analyses a ON a.raw_record_id = r.id
+        LEFT JOIN lead_scores s ON s.raw_record_id = r.id
+        """
+        if has_is_contact
+        else """
+        INSERT OR IGNORE INTO leads (
+            fingerprint, name, industry, wilaya, address, website, phone, email,
+            social_links, rating, review_count, latitude, longitude, source, source_url,
+            phone_details, freshness, digital_score, gaps, recommended_services,
+            analysis_model, priority_score, score_breakdown, status, tags, is_contact,
+            notes, discovered_at, updated_at
+        )
+        SELECT
+            r.fingerprint, r.name, r.industry, r.wilaya, r.address, r.website, r.phone, r.email,
+            COALESCE(r.social_media_handles, '[]'), r.rating, r.review_count,
+            r.latitude, r.longitude, r.source, r.source_url,
+            COALESCE(r.phone_metadata, '[]'),
+            json_object(
+                'discovered_at', r.discovered_at,
+                'last_updated', r.last_updated,
+                'relative_age_hint', r.relative_age_hint,
+                'calculated_age_class', r.calculated_age_class
+            ),
+            a.digital_presence_score,
+            COALESCE(a.pain_points, '[]'),
+            COALESCE(a.recommended_solutions, '[]'),
+            a.analysis_model,
+            COALESCE(s.priority_score, 0.0),
+            COALESCE(s.score_breakdown, '{}'),
+            COALESCE(s.status, 'discovered'),
+            COALESCE(s.tags, '[]'),
+            0,
+            NULL,
+            r.discovered_at,
+            r.created_at
+        FROM raw_records r
+        LEFT JOIN analyses a ON a.raw_record_id = r.id
+        LEFT JOIN lead_scores s ON s.raw_record_id = r.id
         """
     )
 
+    # Capture v1 lineage into memory BEFORE any table drops.
+    id_to_fp = {
+        r["id"]: r["fingerprint"]
+        for r in conn.execute("SELECT id, fingerprint FROM raw_records").fetchall()
+    }
+    try:
+        legacy_entities = conn.execute(
+            "SELECT name, industry, wilaya, confidence, strategy, raw_record_ids, last_resolved_at"
+            " FROM resolved_entities"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        legacy_entities = []
 
-@migration(6, "Add is_contact column to lead_scores for Contacts feature")
-def _migration_6_contacts(conn: sqlite3.Connection) -> None:
-    # Check if column is_contact already exists
-    cursor = conn.execute("PRAGMA table_info(lead_scores);")
-    columns = [row["name"] for row in cursor.fetchall()]
-    if "is_contact" not in columns:
-        conn.execute("ALTER TABLE lead_scores ADD COLUMN is_contact INTEGER DEFAULT 0;")
+    # Drop v1 artifacts. Order matters under PRAGMA foreign_keys=ON:
+    # children first (analyses, lead_scores), then parents
+    # (resolved_entities, raw_records). entity_links (v1 shape) was already
+    # dropped by _ensure_entity_links_v2; recreate it in v2 shape.
+    conn.execute("DROP TABLE IF EXISTS analyses")
+    conn.execute("DROP TABLE IF EXISTS lead_scores")
+    conn.execute("DROP TABLE IF EXISTS resolved_entities")
+    conn.execute("DROP TABLE IF EXISTS raw_records")
+    conn.execute("DROP TABLE IF EXISTS raw_records_fts")
+    _ensure_entity_links_v2(conn)
 
+    # Map v1 resolved_entities -> v2 entity_clusters (+ links + cluster_id).
+    for ent in legacy_entities:
+        try:
+            raw_ids = json.loads(ent["raw_record_ids"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            raw_ids = []
+        fps = [id_to_fp[rid] for rid in raw_ids if rid in id_to_fp]
+        if not fps:
+            continue
+        fp_ph = ",".join("?" for _ in fps)
+        members = conn.execute(
+            f"SELECT id FROM leads WHERE fingerprint IN ({fp_ph})", fps
+        ).fetchall()
+        if not members:
+            continue
 
-@migration(7, "Add lead_attachments table for persistent images/files and file cache")
-def _migration_7_attachments(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS lead_attachments (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            raw_record_id  INTEGER NOT NULL REFERENCES raw_records (id) ON DELETE CASCADE,
-            filename       TEXT NOT NULL,
-            mime_type      TEXT NOT NULL,
-            file_path      TEXT NOT NULL,
-            created_at     TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_lead_attachments_record ON lead_attachments (raw_record_id);
-        """
-    )
+        cur = conn.execute(
+            """INSERT INTO entity_clusters
+               (canonical_lead_id, name, industry, wilaya, confidence, member_count, strategy, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                members[0]["id"], ent["name"], ent["industry"], ent["wilaya"],
+                ent["confidence"], len(members), ent["strategy"],
+                ent["last_resolved_at"], _now_iso(),
+            ),
+        )
+        cluster_id = cur.lastrowid
+        for m in members:
+            conn.execute(
+                "INSERT OR IGNORE INTO entity_links (cluster_id, lead_id, match_score, match_reasons, linked_at)"
+                " VALUES (?, ?, ?, '[]', ?)",
+                (cluster_id, m["id"], ent["confidence"], _now_iso()),
+            )
+            conn.execute("UPDATE leads SET cluster_id = ? WHERE id = ?", (cluster_id, m["id"]))
+
+    logger.info("v1 -> v2 consolidation complete")

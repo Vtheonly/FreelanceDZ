@@ -1,166 +1,210 @@
-"""Discovery service — orchestrates the aggregator and persists raw records.
+"""Streaming discovery orchestration.
 
-This is the entry point for every "find me N businesses" request. It:
+Pipeline (TTFR-optimized — iteration 4's core insight):
+    query -> dialect expansion (offline) -> scrapers streamed concurrently
+    -> per-lead deterministic audit + scoring (native batch) -> upsert.
 
-1. Builds the aggregator with the configured scrapers.
-2. Runs the exhaustive discovery loop.
-3. Persists every discovered ``BusinessRaw`` into ``raw_records``.
-4. Returns a summary (count saved, count skipped as duplicates).
-
-The service is async throughout and uses ``BackgroundTasks``-friendly
-semantics — long-running crawls can be kicked off without blocking the
-API response.
+Leads are persisted as they stream in; the campaign record reflects
+created vs merged counts accurately (fixing v2's duplicate accounting,
+where the repo returned the existing row id on conflict and everything
+was counted as "saved").
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from typing import AsyncIterator, Optional
 
-from core.interfaces import IDiscoveryAggregator, IRawRecordRepository
-from domain.models import BusinessRaw
+from domain.models import Lead
+from engine.analyzer import BusinessAnalyzer
+from engine.resolver import GoldenRecordBuilder, GraphEntityResolver
+from engine.scorer import LeadScorer
+from infrastructure.storage.cluster_repo import ClusterRepository
+from infrastructure.storage.lead_repo import LeadRepository
+from utils.query_expander import AlgerianQueryExpander
 
-
-_logger = logging.getLogger("services.discovery")
-
-
-@dataclass(slots=True)
-class DiscoveryResult:
-    """Outcome of a discovery run — surfaced to the API as JSON."""
-    query: str
-    wilaya: Optional[str]
-    requested_limit: int
-    discovered_count: int
-    saved_count: int
-    duplicate_count: int
-
-    def to_dict(self) -> dict:
-        return {
-            "query": self.query,
-            "wilaya": self.wilaya,
-            "requested_limit": self.requested_limit,
-            "discovered_count": self.discovered_count,
-            "saved_count": self.saved_count,
-            "duplicate_count": self.duplicate_count,
-        }
+logger = logging.getLogger("services.discovery")
 
 
 class DiscoveryService:
-    """Orchestrates discovery and persistence."""
+    def __init__(
+        self,
+        aggregator,                     # ScraperAggregator
+        repo: LeadRepository,
+        analyzer: Optional[BusinessAnalyzer] = None,
+        scorer: Optional[LeadScorer] = None,
+        expander: Optional[AlgerianQueryExpander] = None,
+    ) -> None:
+        self._aggregator = aggregator
+        self._repo = repo
+        self._analyzer = analyzer or BusinessAnalyzer()
+        self._scorer = scorer or LeadScorer()
+        self._expander = expander or AlgerianQueryExpander()
+
+    # ------------------------------------------------------------------
+    async def discover(
+        self, query: str, wilaya: Optional[str] = None, limit: int = 30
+    ) -> dict:
+        campaign_id = await self._repo.create_campaign(query, wilaya, limit)
+        created = merged = 0
+        try:
+            async for lead in self.stream(query, wilaya, limit):
+                _, was_created = await self._repo.upsert(lead)
+                if was_created:
+                    created += 1
+                else:
+                    merged += 1
+            status = "completed"
+        except Exception:
+            await self._repo.finish_campaign(campaign_id, "failed", 0, 0, 0)
+            raise
+
+        await self._repo.finish_campaign(
+            campaign_id, status, created + merged, created, merged
+        )
+        return {
+            "query": query,
+            "wilaya": wilaya,
+            "target_limit": limit,
+            "saved_count": created,
+            "merged_count": merged,
+            "campaign_id": campaign_id,
+        }
+
+    # ------------------------------------------------------------------
+    async def stream(
+        self, query: str, wilaya: Optional[str] = None, limit: int = 30
+    ) -> AsyncIterator[Lead]:
+        """Audit + score every streamed candidate before yielding it."""
+        variants = await self._expander.expand(query)
+        if not variants:
+            return
+
+        async for lead in self._aggregator.stream_discover(variants, wilaya, limit):
+            audit = self._analyzer.audit(lead)
+            lead.digital_score = audit.digital_score
+            lead.digital_tier = audit.digital_tier
+            lead.gaps = audit.gaps
+            lead.recommended_services = [s.to_dict() for s in audit.recommended_services]
+            lead.cta_fr = audit.cta_fr
+            lead.cta_ar = audit.cta_ar
+            lead.analysis_model = audit.analysis_model
+            self._scorer.score(lead)
+            yield lead
+
+
+class ScraperAggregator:
+    """Coordinates every enabled scraper concurrently over query variants.
+
+    Exhaustive pagination is preserved from v2.0.0: variants are cycled
+    until the limit is met or all sources are dry.
+    """
+
+    def __init__(self, scrapers: list) -> None:
+        self._scrapers = list(scrapers)
+
+    def add_scraper(self, scraper) -> None:
+        self._scrapers.append(scraper)
+
+    async def stream_discover(
+        self,
+        variants: list[str],
+        wilaya: Optional[str],
+        limit: int,
+    ) -> AsyncIterator[Lead]:
+        if not self._scrapers:
+            return
+
+        seen: set[str] = set()
+        yielded = 0
+
+        for variant in variants:
+            if yielded >= limit:
+                break
+            over_fetch = max(limit * 2, limit + 5)
+
+            tasks = {
+                scraper.source_name: scraper.stream_discover(
+                    variant, wilaya=wilaya, limit=over_fetch
+                )
+                for scraper in self._scrapers
+            }
+
+            # Fan-in: consume every scraper's stream as results arrive.
+            queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+
+            async def pump(name: str, stream) -> None:
+                try:
+                    async for lead in stream:
+                        await queue.put((name, lead))
+                except Exception as exc:  # one scraper failing must not kill the rest
+                    logger.warning("Scraper %s failed on %r: %s", name, variant, exc)
+                finally:
+                    await queue.put((name, None))
+
+            pumps = [
+                asyncio.create_task(pump(name, stream), name=f"pump-{name}")
+                for name, stream in tasks.items()
+            ]
+            try:
+                finished = 0
+                while finished < len(pumps):
+                    name, lead = await queue.get()
+                    if lead is None:
+                        finished += 1
+                        continue
+                    fp = lead.fingerprint()
+                    if fp in seen:
+                        continue
+                    seen.add(fp)
+                    yielded += 1
+                    yield lead
+                    if yielded >= limit:
+                        break
+            finally:
+                for task in pumps:
+                    task.cancel()
+                await asyncio.gather(*pumps, return_exceptions=True)
+
+
+class ResolutionService:
+    """Non-destructive entity resolution over the unified leads table."""
 
     def __init__(
         self,
-        aggregator: IDiscoveryAggregator,
-        raw_repo: IRawRecordRepository,
+        repo: LeadRepository,
+        clusters: ClusterRepository,
+        resolver: Optional[GraphEntityResolver] = None,
     ) -> None:
-        self._aggregator = aggregator
-        self._repo = raw_repo
+        self._repo = repo
+        self._clusters = clusters
+        self._resolver = resolver or GraphEntityResolver()
 
-    async def discover(
-        self,
-        query: str,
-        wilaya: Optional[str] = None,
-        limit: int = 30,
-    ) -> DiscoveryResult:
-        """Run an exhaustive discovery campaign and track its progress in the database."""
-        _logger.info("Discovery start: query=%r wilaya=%r limit=%d", query, wilaya, limit)
-        
-        # Track campaign state in DB
-        campaign_id = await self.create_campaign(query, wilaya, limit)
-        await self.update_campaign_status(campaign_id, "processing")
-        
-        try:
-            businesses = await self._aggregator.discover_exhaustive(
-                query=query, wilaya=wilaya, limit=limit
-            )
-            saved = 0
-            duplicates = 0
-            for biz in businesses:
-                row_id = await self._repo.save(biz)
-                if row_id is not None:
-                    saved += 1
-                    _logger.info("Saved lead id=%d: %s", row_id, biz.name)
-                else:
-                    duplicates += 1
-                    _logger.debug("Skipped duplicate: %s", biz.name)
-            
-            result = DiscoveryResult(
-                query=query,
-                wilaya=wilaya,
-                requested_limit=limit,
-                discovered_count=len(businesses),
-                saved_count=saved,
-                duplicate_count=duplicates,
-            )
-            _logger.info(
-                "Discovery complete: %d discovered, %d new, %d duplicates",
-                result.discovered_count, result.saved_count, result.duplicate_count,
-            )
-            
-            await self.update_campaign_status(
-                campaign_id, "completed", discovered=len(businesses), saved=saved
-            )
-            return result
-            
-        except Exception as exc:
-            await self.update_campaign_status(campaign_id, "failed")
-            _logger.exception("Discovery failed: %s", exc)
-            raise
+    async def resolve_all(self, batch_size: Optional[int] = None) -> dict:
+        from config.settings import get_settings
+        limit = batch_size or get_settings().ENTITY_RESOLUTION_BATCH
 
-    async def discover_many(
-        self,
-        queries: list[str],
-        wilaya: Optional[str] = None,
-        limit_per_query: int = 20,
-    ) -> list[DiscoveryResult]:
-        """Run discovery for multiple queries in sequence."""
-        results: list[DiscoveryResult] = []
-        for q in queries:
-            res = await self.discover(query=q, wilaya=wilaya, limit=limit_per_query)
-            results.append(res)
-        return results
+        leads = await self._repo.all_for_resolution(limit)
+        if not leads:
+            return {"input_count": 0, "output_count": 0, "clusters_stored": 0,
+                    "duration_seconds": 0.0, "engine": "idle"}
 
-    # ------------------------------------------------------------------
-    #  Discovery Campaigns (Queue Tracking)
-    # ------------------------------------------------------------------
+        import asyncio as _asyncio
+        clusters, report = await _asyncio.to_thread(self._resolver.resolve, leads)
 
-    async def create_campaign(self, query: str, wilaya: Optional[str], limit_num: int) -> int:
-        now = datetime.now(timezone.utc).isoformat()
-        def _execute():
-            with self._repo._db.connection() as conn:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO discovery_campaigns (query, wilaya, limit_num, status, created_at, updated_at)
-                    VALUES (?, ?, ?, 'pending', ?, ?)
-                    """,
-                    (query, wilaya, limit_num, now, now)
-                )
-                return cursor.lastrowid
-        return await asyncio.to_thread(_execute)
+        records = []
+        for group in clusters:
+            if len(group) < 2:
+                continue  # singletons: nothing to store
+            members = [leads[i] for i in group]
+            records.append(GoldenRecordBuilder.build(members))
 
-    async def update_campaign_status(self, campaign_id: int, status: str, discovered: int = 0, saved: int = 0) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        def _execute():
-            with self._repo._db.connection() as conn:
-                conn.execute(
-                    """
-                    UPDATE discovery_campaigns
-                    SET status = ?, discovered_qty = ?, saved_qty = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (status, discovered, saved, now, campaign_id)
-                )
-        await asyncio.to_thread(_execute)
+        stored = 0
+        if records:
+            stored = await self._clusters.replace_all(records)
 
-    async def list_campaigns(self, limit: int = 10) -> list[dict]:
-        def _execute():
-            with self._repo._db.connection() as conn:
-                rows = conn.execute(
-                    "SELECT * FROM discovery_campaigns ORDER BY created_at DESC LIMIT ?",
-                    (limit,)
-                ).fetchall()
-                return [dict(r) for r in rows]
-        return await asyncio.to_thread(_execute)
+        result = report.to_dict()
+        result["clusters_stored"] = stored
+        result["multi_member_clusters"] = len(records)
+        return result

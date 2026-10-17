@@ -27,10 +27,13 @@ def test_blocks_empty_url():
     assert f.is_spam("", "Some title") is True
 
 
-def test_blocks_social_platforms():
+def test_allows_social_platforms():
+    """Social URLs are deliberately allowed: the DDG scraper deep-crawls them
+    to enrich business profiles (v2's stale test asserted the opposite and
+    contradicted both the implementation and the enrichment design)."""
     f = SourcingSpamFilter()
-    assert f.is_spam("https://facebook.com/somepage", "Some Page") is True
-    assert f.is_spam("https://instagram.com/someprofile", "Some Profile") is True
+    assert f.is_spam("https://facebook.com/somepage", "Some Page") is False
+    assert f.is_spam("https://instagram.com/someprofile", "Some Profile") is False
 
 
 def test_custom_extras():

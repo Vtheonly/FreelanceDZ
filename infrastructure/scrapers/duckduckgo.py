@@ -1,285 +1,278 @@
-"""Async, paginated DuckDuckGo scraper.
+"""Streaming DuckDuckGo HTML scraper.
 
-Key improvements over the original implementation:
+v3 restructures discovery around iteration 4's streaming insight: results are
+yielded the moment a SERP page is parsed, so the engine's audit + scoring +
+persistence start on the FIRST page while later pages are still in flight
+(sub-second time-to-first-result instead of full-campaign latency).
 
-1. **Async** — uses the shared ``httpx.AsyncClient`` instead of blocking
-   ``requests.get``. Multiple pages can be fetched concurrently when
-   configured.
-2. **Paginated** — iterates through up to ``MAX_SEARCH_PAGES`` pages of
-   DDG results per query expansion, so a request for 30 results does
-   not stop after the first page of 10.
-3. **Query expansion** — the caller (the aggregator) expands the query
-   into FR / MSA / Darja variants before invoking the scraper; this
-   scraper just runs each variant until the limit is reached.
-4. **Spam filtering** — directory aggregators (Cybo, YellowPages, etc.)
-   are dropped *before* building ``BusinessRaw`` objects.
-5. **Deep content extraction** — when a result URL looks like a real
-   business page (not a directory), the scraper optionally fetches the
-   page and runs ``AdvancedContentExtractor`` to pull structured data
-   from JSON-LD schemas.
-6. **Smart phone validation** — uses ``libphonenumber`` instead of
-   fragile regexes.
+Two-layer extraction is preserved from v2.0.0 (its strongest idea):
+    Layer 1 — SERP title/snippet -> Lead with phones/email/freshness.
+    Layer 2 — optional deep crawl of result pages using the NATIVE SIMD
+    zero-copy scanner first (title/meta/links/tel/mailto/JSON-LD pointer),
+    falling back to BeautifulSoup + AdvancedContentExtractor only when the
+    fast scanner finds no signal (malformed pages, heavy JS markup).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from json import JSONDecodeError
+from typing import AsyncIterator, Optional
 
 from bs4 import BeautifulSoup
 
-from config.settings import get_settings
-from domain.enums import DataSource, FreshnessAge
-from domain.models import BusinessRaw
+from domain.enums import DataSource
+from domain.models import Lead
 from domain.value_objects import FreshnessMetadata
-from infrastructure.http.rate_limiter import AsyncRateLimiter, DomainRateLimiter
+from engine.native import NativeEngine
 from infrastructure.scrapers.base import BaseAsyncScraper
 from infrastructure.scrapers.content_extractor import AdvancedContentExtractor
-from utils.contact_parser import extract_first_email, classify_social_platform
+from utils.anti_block_engine import CrawlerAntiBlockEngine
+from utils.contact_parser import extract_first_email, extract_social_links
 from utils.freshness_detector import FreshnessDetector
 from utils.phone_validator import SmartPhoneValidator
-from utils.spam_filter import SourcingSpamFilter
 from utils.url_utils import clean_url, unwrap_ddg_url
 
-
-_logger = logging.getLogger("scrapers.duckduckgo")
+logger = logging.getLogger("scrapers.duckduckgo")
 
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
+_RESULTS_PER_PAGE = 30
 
 
-class AsyncDuckDuckGoScraper(BaseAsyncScraper):
-    """Paginated, async DuckDuckGo HTML scraper."""
+class DuckDuckGoScraper(BaseAsyncScraper):
+    """Paginated, streaming DDG search scraper."""
 
-    def __init__(
-        self,
-        client,
-        spam_filter: Optional[SourcingSpamFilter] = None,
-        phone_validator: Optional[SmartPhoneValidator] = None,
-        freshness_detector: Optional[FreshnessDetector] = None,
-        content_extractor: Optional[AdvancedContentExtractor] = None,
-        rate_limiter: Optional[AsyncRateLimiter] = None,
-        domain_limiter: Optional[DomainRateLimiter] = None,
-        deep_crawl: bool = False,  # Disabled by default for snappy interactive searches
-    ) -> None:
-        super().__init__(
-            client=client,
-            spam_filter=spam_filter,
-            rate_limiter=rate_limiter,
-            domain_limiter=domain_limiter,
-        )
-        self._phone_validator = phone_validator or SmartPhoneValidator()
-        self._freshness = freshness_detector or FreshnessDetector()
-        self._content_extractor = content_extractor or AdvancedContentExtractor()
+    def __init__(self, client, *, deep_crawl: bool = False, **kwargs) -> None:
+        super().__init__(client, **kwargs)
+        self._phone_validator = SmartPhoneValidator()
+        self._freshness = FreshnessDetector()
+        self._extractor = AdvancedContentExtractor()
+        self._native = NativeEngine.get()
         self._deep_crawl = deep_crawl
 
     @property
     def source_name(self) -> str:
         return "duckduckgo"
 
-    async def discover(
-        self,
-        query: str,
-        wilaya: Optional[str] = None,
-        limit: int = 10,
-    ) -> list[BusinessRaw]:
-        """Paginated discovery with deep content extraction."""
-        if not query:
-            return []
-        self._logger.info("DDG discover: query=%r wilaya=%r limit=%d", query, wilaya, limit)
+    # ------------------------------------------------------------------
+    async def discover(self, query: str, wilaya: Optional[str] = None, limit: int = 30) -> list[Lead]:
+        return [lead async for lead in self.stream_discover(query, wilaya, limit)]
 
-        settings = get_settings()
-        max_pages = settings.MAX_SEARCH_PAGES
-        discovered: list[BusinessRaw] = []
-        seen_fingerprints: set[str] = set()
+    async def stream_discover(
+        self, query: str, wilaya: Optional[str] = None, limit: int = 30
+    ) -> AsyncIterator[Lead]:
+        if not query:
+            return
+        full_query = self._build_query(query, wilaya)
+        seen: set[str] = set()
+        max_pages = get_settings_max_pages()
+        yielded = 0
 
         for page in range(max_pages):
-            if len(discovered) >= limit:
+            if yielded >= limit:
                 break
-
-            offset = page * 30  # DDG returns ~30 results per page.
-            full_query = self._build_query(query, wilaya)
-            params = {"q": full_query, "s": str(offset), "kl": "dz-ar"}
-
+            params = {"q": full_query, "s": str(page * _RESULTS_PER_PAGE), "kl": "dz-ar"}
             response = await self._fetch(DDG_HTML_URL, params=params, timeout=12.0)
             if response is None:
-                self._logger.debug("DDG page %d returned no response — stopping.", page)
                 break
 
-            results = self._parse_results(response.text)
+            results = self._parse_serp(response.text)
             if not results:
-                self._logger.debug("DDG page %d had no parseable results — stopping.", page)
                 break
 
-            self._logger.debug("DDG page %d: %d raw results", page, len(results))
-
-            # Process results concurrently within the page for speed.
-            batch = await asyncio.gather(
-                *(
-                    self._result_to_business(r, query, wilaya)
-                    for r in results
-                ),
+            # Concurrently convert + (optionally) deep-enrich this page.
+            enriched = await asyncio.gather(
+                *(self._result_to_lead(r, query, wilaya) for r in results),
                 return_exceptions=True,
             )
-            for item in batch:
-                if not isinstance(item, BusinessRaw):
+            for item in enriched:
+                if not isinstance(item, Lead):
                     continue
                 fp = item.fingerprint()
-                if fp in seen_fingerprints:
+                if fp in seen:
                     continue
-                seen_fingerprints.add(fp)
-                discovered.append(item)
-                if len(discovered) >= limit:
-                    break
-
-        self._logger.info("DDG discovered %d businesses for %r", len(discovered), query)
-        return discovered
+                seen.add(fp)
+                yielded += 1
+                yield item
+                if yielded >= limit:
+                    return
 
     # ------------------------------------------------------------------
-    #  Parsing
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _build_query(query: str, wilaya: Optional[str]) -> str:
+        return f"{query} {wilaya} Algérie" if wilaya else f"{query} Algérie"
 
-    def _build_query(self, query: str, wilaya: Optional[str]) -> str:
-        if wilaya:
-            return f"{query} {wilaya} Algérie"
-        return f"{query} Algérie"
-
-    def _parse_results(self, html: str) -> list[dict[str, str]]:
-        """Extract organic result blocks from a DDG HTML page."""
+    @staticmethod
+    def _parse_serp(html: str) -> list[dict]:
         try:
             soup = BeautifulSoup(html, "lxml")
         except Exception:
             soup = BeautifulSoup(html, "html.parser")
 
-        results: list[dict[str, str]] = []
-        for anchor in soup.find_all("a", class_="result__a"):
-            title = anchor.get_text(strip=True)
-            raw_href = anchor.get("href", "")
-            url = unwrap_ddg_url(raw_href)
-            if not title or not url:
+        results: list[dict] = []
+        for result in soup.find_all("div", class_="result"):
+            anchor = result.find("a", class_="result__a")
+            if not anchor:
                 continue
-            # Snippet is the next sibling with class result__snippet.
-            snippet = ""
-            parent = anchor.find_parent(class_="result")
-            if parent is not None:
-                snippet_tag = parent.find("a", class_="result__snippet")
-                if snippet_tag:
-                    snippet = snippet_tag.get_text(strip=True)
-            results.append({"title": title, "url": url, "snippet": snippet})
+            raw_url = anchor.get("href", "")
+            url = clean_url(unwrap_ddg_url(raw_url))
+            title = anchor.get_text(strip=True)
+            snippet_tag = result.find("a", class_="result__snippet")
+            snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
+            if url and title:
+                results.append({"url": url, "title": title, "snippet": snippet})
         return results
 
-    async def _result_to_business(
-        self,
-        result: dict[str, str],
-        query: str,
-        wilaya: Optional[str],
-    ) -> Optional[BusinessRaw]:
-        title = result.get("title", "").strip()
-        url = clean_url(result.get("url", ""))
-        snippet = result.get("snippet", "").strip()
-
-        if not title or len(title) < 3 or not url:
+    async def _result_to_lead(
+        self, result: dict, query: str, wilaya: Optional[str]
+    ) -> Optional[Lead]:
+        url, title, snippet = result["url"], result["title"], result["snippet"]
+        if not url or not title or self._spam_filter.is_spam(url, title):
             return None
 
-        # Drop directory aggregators before doing any expensive work.
-        if self._spam_filter.is_spam(url, title):
-            return None
+        text = f"{title} {snippet}"
+        phones = self._phone_validator.extract_and_validate(text)
+        freshness = self._freshness.detect(snippet)
 
-        # Phase 1: build a preliminary record from SERP metadata.
-        phone_meta = self._phone_validator.extract_and_validate(f"{title} {snippet}")
-        phone_primary = phone_meta[0].e164 if phone_meta else None
-        email = extract_first_email(snippet)
-        freshness_meta = self._freshness.detect(snippet)
-
-        biz = BusinessRaw(
+        lead = Lead(
             name=title[:200],
-            industry=query.title() if query else "Other",
-            wilaya=wilaya or "Unknown",
+            industry=query.strip()[:100],
+            wilaya=(wilaya or "").strip()[:100],
             website=url,
-            phone=phone_primary,
-            email=email,
+            phone=phones[0].e164 if phones else None,
+            email=extract_first_email(text),
+            phone_details=phones,
+            social_links=[],
             source=DataSource.DUCKDUCKGO,
             source_url=url,
-            phone_metadata=phone_meta,
-            freshness=freshness_meta,
+            notes=snippet[:400] or None,
+            freshness=freshness,
         )
 
-        # Check if URL represents a social profile
-        is_social = bool(classify_social_platform(url))
+        # Layer 2: deep enrichment for business-looking pages.
+        try:
+            is_social = any(
+                host in url.lower()
+                for host in ("facebook.com", "instagram.com", "tiktok.com")
+            )
+            if self._deep_crawl or is_social:
+                await self._enrich(lead)
+        except Exception as exc:  # enrichment is best-effort
+            logger.debug("Deep enrichment failed for %s: %s", url, exc)
+        return lead
 
-        # Always trigger deep enrichment for social links to pull contact info
-        if (self._deep_crawl or is_social) and url:
-            await self._enrich_with_deep_crawl(biz)
-
-        return biz
-
-    async def _enrich_with_deep_crawl(self, biz: BusinessRaw) -> None:
-        """Fetch the business website and merge structured schema data."""
-        if not biz.website:
-            return
-            
-        platform = classify_social_platform(biz.website)
-        
-        # Route to specialized social scrapers if the lead is social-only
-        if platform in ("facebook", "instagram", "tiktok"):
-            try:
-                from infrastructure.scrapers.plugins.facebook_plugin import FacebookPlugin
-                from infrastructure.scrapers.plugins.instagram_plugin import InstagramPlugin
-                from infrastructure.scrapers.plugins.tiktok_plugin import TikTokPlugin
-                
-                plugin = None
-                if platform == "facebook":
-                    plugin = FacebookPlugin(self.client)
-                elif platform == "instagram":
-                    plugin = InstagramPlugin(self.client)
-                elif platform == "tiktok":
-                    plugin = TikTokPlugin(self.client)
-                    
-                if plugin:
-                    social_biz = await plugin.scrape_target(biz.website)
-                    if social_biz:
-                        if social_biz.name and len(social_biz.name) > 2:
-                            biz.name = social_biz.name[:200]
-                        if social_biz.phone:
-                            biz.phone = social_biz.phone
-                            biz.phone_metadata = social_biz.phone_metadata
-                        if social_biz.email:
-                            biz.email = social_biz.email
-                        if social_biz.address and social_biz.address != "Unknown":
-                            biz.address = social_biz.address
-                        biz.freshness = social_biz.freshness
-                        biz.social_media_handles = list(set(biz.social_media_handles + [biz.website]))
-                        return
-            except Exception as exc:
-                self._logger.debug("Social plugin enrichment failed for %s: %s", biz.website, exc)
-
-        # Fallback for standard websites
-        response = await self._fetch(biz.website, timeout=8.0)
+    # ------------------------------------------------------------------
+    async def _enrich(self, lead: Lead) -> None:
+        """Fetch the target page and merge structured signals into the lead."""
+        response = await self._fetch(lead.website, timeout=8.0, mobile=True)
         if response is None:
             return
-        profile = self._content_extractor.extract_deep_profile(response.text, biz.website)
+        html = response.content
 
-        if profile.get("name") and len(profile["name"]) > 2:
-            biz.name = profile["name"][:200]
-        if profile.get("address"):
-            biz.address = profile["address"]
-        if profile.get("email") and not biz.email:
-            biz.email = profile["email"]
-        if profile.get("socials"):
-            merged = list(set((biz.social_media_handles or []) + profile["socials"]))[:10]
-            biz.social_media_handles = merged
+        # Native SIMD fast path (zero-copy structural scan).
+        extraction = self._native.extract_html(html)
+        json_ld_text = extraction.json_ld or None
 
-        # Re-validate newly discovered phone numbers
-        raw_phones = " ".join(profile.get("phones", []))
-        if raw_phones:
-            extra_meta = self._phone_validator.extract_and_validate(raw_phones)
-            if extra_meta:
-                combined = self._phone_validator.deduplicate(
-                    list(biz.phone_metadata) + extra_meta
-                )
-                biz.phone_metadata = combined
-                biz.phone = combined[0].e164
+        if extraction.has_signal and json_ld_text:
+            self._merge_native(lead, extraction, json_ld_text, response)
+            return
 
-        # Refresh freshness from actual page content
-        headers_dict = dict(response.headers) if hasattr(response, "headers") else None
-        biz.freshness = self._freshness.detect(response.text, headers=headers_dict)
+        # Fallback: full DOM parse (handles malformed pages the scanner misses).
+        profile = self._extractor.extract_deep_profile(
+            response.text, lead.website or ""
+        )
+        if profile:
+            if profile.get("name"):
+                lead.name = str(profile["name"])[:200]
+            if profile.get("address") and not lead.address:
+                lead.address = str(profile["address"])[:400]
+            if profile.get("email") and not lead.email:
+                lead.email = str(profile["email"])
+            if profile.get("phones"):
+                raw = " ".join(str(p) for p in profile["phones"])
+                extra = self._phone_validator.extract_and_validate(raw)
+                if extra and not lead.phone:
+                    lead.phone = extra[0].e164
+                lead.phone_details = self._merge_phones(lead.phone_details, extra)
+            socials = profile.get("social_links") or []
+            if socials:
+                merged = list(dict.fromkeys(
+                    lead.social_links + [str(s) for s in socials]
+                ))
+                lead.social_links = merged[:10]
+            if profile.get("rating") is not None:
+                lead.rating = max(lead.rating, float(profile["rating"]))
+            if profile.get("review_count"):
+                lead.review_count = max(lead.review_count, int(profile["review_count"]))
+        refreshed = self._freshness.detect(response.text, response.headers)
+        if refreshed.calculated_age_class.value != "older":
+            lead.freshness = refreshed
+
+    def _merge_native(self, lead: Lead, extraction, json_ld_text: str, response) -> None:
+        """Apply the native scanner's findings (JSON-LD parsed in Python)."""
+        import json
+        try:
+            schema = json.loads(json_ld_text)
+        except JSONDecodeError:
+            schema = None
+
+        if isinstance(schema, dict):
+            name = schema.get("name") or schema.get("legalName")
+            if name:
+                lead.name = str(name)[:200]
+            if schema.get("telephone") and not lead.phone:
+                phones = self._phone_validator.extract_and_validate(str(schema["telephone"]))
+                if phones:
+                    lead.phone = phones[0].e164
+                    lead.phone_details = phones
+            if schema.get("email") and not lead.email:
+                lead.email = str(schema["email"])
+            if schema.get("address"):
+                addr = schema["address"]
+                if isinstance(addr, dict):
+                    parts = [str(addr.get(k, "")) for k in
+                             ("streetAddress", "addressLocality", "addressRegion")]
+                    addr = ", ".join(p for p in parts if p)
+                if addr and not lead.address:
+                    lead.address = str(addr)[:400]
+            same_as = schema.get("sameAs") or []
+            if isinstance(same_as, list):
+                socials = extract_social_links_from_urls([str(s) for s in same_as])
+                if socials:
+                    lead.social_links = list(dict.fromkeys(lead.social_links + socials))[:10]
+
+        if extraction.email and not lead.email:
+            lead.email = extraction.email
+        if extraction.phones and not lead.phone_details:
+            raw = " ".join(extraction.phones)
+            lead.phone_details = self._phone_validator.extract_and_validate(raw)
+            if lead.phone_details and not lead.phone:
+                lead.phone = lead.phone_details[0].e164
+        socials = extract_social_links_from_urls(extraction.links)
+        if socials:
+            lead.social_links = list(dict.fromkeys(lead.social_links + socials))[:10]
+        refreshed = self._freshness.detect(
+            extraction.meta_description or "", response.headers
+        )
+        if refreshed.calculated_age_class.value != "older":
+            lead.freshness = refreshed
+
+    @staticmethod
+    def _merge_phones(existing: list, extra: list) -> list:
+        seen = {p.e164 for p in existing}
+        return existing + [p for p in extra if p.e164 not in seen]
+
+
+def extract_social_links_from_urls(urls: list[str]) -> list[str]:
+    from utils.contact_parser import classify_social_platform
+    out: list[str] = []
+    for u in urls:
+        if u.startswith(("http://", "https://", "//")) and classify_social_platform(u):
+            out.append(u)
+    return out
+
+
+def get_settings_max_pages() -> int:
+    from config.settings import get_settings
+    return get_settings().MAX_SEARCH_PAGES

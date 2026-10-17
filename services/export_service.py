@@ -1,11 +1,12 @@
-"""Export service — write leads / entities to CSV and JSON files.
+"""Export service — CSV/JSON snapshots of leads and clusters.
 
-Produces clean, timestamped exports in ``data/exports/`` so users can
-pull data into Excel, a CRM, or another pipeline.
+v3 fix: file I/O is offloaded to a worker thread (v2 wrote files directly
+on the event loop).
 """
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import logging
@@ -14,77 +15,79 @@ from pathlib import Path
 from typing import Optional
 
 from config.settings import get_settings
-from core.interfaces import ILeadRepository, IResolvedEntityRepository
+from infrastructure.storage.cluster_repo import ClusterRepository
+from infrastructure.storage.lead_repo import LeadRepository
 
+logger = logging.getLogger("services.export")
 
-_logger = logging.getLogger("services.export")
+CSV_COLUMNS = (
+    "id", "name", "industry", "wilaya", "phone", "email", "website", "address",
+    "priority_score", "digital_score", "status", "tags", "source",
+    "discovered_at",
+)
 
 
 class ExportService:
-    """Export leads and resolved entities to disk."""
-
     def __init__(
         self,
-        lead_repo: ILeadRepository,
-        resolved_repo: IResolvedEntityRepository,
+        repo: LeadRepository,
+        clusters: ClusterRepository,
         export_dir: Optional[Path] = None,
     ) -> None:
-        self._lead_repo = lead_repo
-        self._resolved_repo = resolved_repo
-        self._export_dir = export_dir or get_settings().resolved_export_dir
-        self._export_dir.mkdir(parents=True, exist_ok=True)
+        self._repo = repo
+        self._clusters = clusters
+        self._dir = export_dir or get_settings().resolved_export_dir
 
     async def export_leads_csv(self, limit: int = 1000) -> Path:
-        """Export the top ``limit`` leads to a CSV file. Returns the path."""
-        leads = await self._lead_repo.list_leads(min_score=0.0, limit=limit)
-        path = self._export_dir / f"leads_{_timestamp()}.csv"
-        with path.open("w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "id", "name", "industry", "wilaya", "address", "website",
-                "phone", "email", "rating", "review_count", "source",
-                "priority_score", "status", "freshness", "discovered_at",
-            ])
-            for lead in leads:
-                biz = lead.business
-                writer.writerow([
-                    lead.id, biz.name, biz.industry, biz.wilaya, biz.address,
-                    biz.website, biz.phone, biz.email, biz.rating, biz.review_count,
-                    biz.source.value, lead.priority_score, lead.status.value,
-                    biz.freshness.calculated_age_class.value,
-                    biz.discovered_at.isoformat() if biz.discovered_at else "",
-                ])
-        _logger.info("Exported %d leads to %s", len(leads), path)
-        return path
+        leads = await self._repo.list_leads(limit=limit, exclude_rejected=False)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        path = self._dir / f"leads_{stamp}.csv"
+
+        def _write() -> Path:
+            with path.open("w", newline="", encoding="utf-8-sig") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(CSV_COLUMNS)
+                for l in leads:
+                    writer.writerow([
+                        l.id, l.name, l.industry, l.wilaya, l.phone or "",
+                        l.email or "", l.website or "", l.address or "",
+                        l.priority_score, l.digital_score if l.digital_score is not None else "",
+                        l.status.value, ";".join(l.tags), l.source.value,
+                        l.discovered_at.isoformat(),
+                    ])
+            return path
+
+        result = await asyncio.to_thread(_write)
+        logger.info("Exported %d leads to %s", len(leads), result)
+        return result
 
     async def export_leads_json(self, limit: int = 1000) -> Path:
-        """Export leads to a JSON file. Returns the path."""
-        leads = await self._lead_repo.list_leads(min_score=0.0, limit=limit)
-        path = self._export_dir / f"leads_{_timestamp()}.json"
-        payload = [
-            {
-                "id": lead.id,
-                "business": lead.business.model_dump(mode="json"),
-                "priority_score": lead.priority_score,
-                "status": lead.status.value,
-                "tags": lead.tags,
-                "analysis": lead.analysis.model_dump(mode="json") if lead.analysis else None,
-            }
-            for lead in leads
-        ]
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        _logger.info("Exported %d leads to %s", len(leads), path)
-        return path
+        leads = await self._repo.list_leads(limit=limit, exclude_rejected=False)
+        payload = [l.model_dump(mode="json") for l in leads]
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        path = self._dir / f"leads_{stamp}.json"
 
-    async def export_entities_json(self, limit: int = 1000) -> Path:
-        """Export resolved entities to a JSON file. Returns the path."""
-        entities = await self._resolved_repo.list_all(min_confidence=0.0, limit=limit)
-        path = self._export_dir / f"entities_{_timestamp()}.json"
-        payload = [e.model_dump(mode="json") for e in entities]
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        _logger.info("Exported %d entities to %s", len(entities), path)
-        return path
+        def _write() -> Path:
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            return path
 
+        result = await asyncio.to_thread(_write)
+        logger.info("Exported %d leads to %s", len(leads), result)
+        return result
 
-def _timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    async def export_clusters_json(self, limit: int = 1000) -> Path:
+        clusters = await self._clusters.list_clusters(limit=limit)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        path = self._dir / f"entities_{stamp}.json"
+
+        def _write() -> Path:
+            path.write_text(
+                json.dumps(clusters, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+            return path
+
+        result = await asyncio.to_thread(_write)
+        return result
