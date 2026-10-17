@@ -244,6 +244,7 @@ async def bulk_status(
 
 @router.get("/leads")
 async def list_leads(
+    q: Optional[str] = Query(None, max_length=200, description="FTS search over names/industries"),
     wilaya: Optional[str] = Query(None),
     industry: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -257,8 +258,10 @@ async def list_leads(
     offset: int = Query(0, ge=0),
     repo: LeadRepository = Depends(get_lead_repo),
 ):
+    """Unified listing (v4 Task 5): ``q`` composes with every structured
+    filter in one query, so text search never drops wilaya/score/tag/etc."""
     leads = await repo.list_leads(
-        wilaya=wilaya, industry=industry, status=status, is_contact=is_contact,
+        q=q, wilaya=wilaya, industry=industry, status=status, is_contact=is_contact,
         tag=tag, age_class=age_class, min_score=min_score,
         sort_by=sort_by, sort_order=sort_order, limit=limit, offset=offset,
     )

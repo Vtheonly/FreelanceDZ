@@ -3,18 +3,23 @@
 Factor weights are domain rules (justified constants, not runtime config):
     reachability  <= 35   phone 15, mobile +10, whatsapp +5, email +5
     substance     <= 25   website 10, social 5, address 5, geo 5
+    opportunity   <= 25   website_build 15, local_seo 10 (v4 Task 10 —
+                          absence of digital presence is a sales lead, not
+                          a penalty: a reachable business with no website
+                          and no map pin is the best web-design prospect)
     deficit       <= 25   (100 - digital_score) * 0.25  (inverse opportunity)
     freshness     <= 15   hour 15, day 10, week 7, month 4, older 2
 
-The arithmetic mirrors engine_score_batch in the native core exactly
-(parity asserted by tests/test_native_parity.py::test_score_batch_parity).
+The arithmetic lives in ``engine.fastops.score_batch`` — the single
+source of truth shared by the single-lead and batch paths (asserted by
+tests/test_fastops.py).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from engine.native import (
+from engine.fastops import (
     FLAG_ADDRESS,
     FLAG_EMAIL,
     FLAG_GEO,
@@ -24,30 +29,19 @@ from engine.native import (
     FLAG_SSL,
     FLAG_WEBSITE,
     FLAG_WHATSAPP,
-    NativeEngine,
+    WEIGHTS,
+    FRESHNESS_POINTS,
+    score_batch,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
     from domain.models import Lead
 
 FRESHNESS_BUCKET = {"hour": 0, "day": 1, "week": 2, "month": 3, "older": 4}
-FRESHNESS_POINTS = (15.0, 10.0, 7.0, 4.0, 2.0)
-
-WEIGHTS = {
-    "phone_present": 15.0,
-    "mobile_direct": 10.0,
-    "whatsapp_ready": 5.0,
-    "email_present": 5.0,
-    "website_active": 10.0,
-    "social_channel": 5.0,
-    "physical_location": 5.0,
-    "geo_verified": 5.0,
-    "deficit_multiplier": 0.25,
-}
 
 
 def channel_flags(lead: "Lead") -> int:
-    """Bit-pack the hot state (mirrors FDZ_FLAG_* layout)."""
+    """Bit-pack the hot state (flag layout shared with fastops)."""
     f = 0
     if lead.website:
         f |= FLAG_WEBSITE
@@ -73,25 +67,20 @@ def channel_flags(lead: "Lead") -> int:
 class LeadScorer:
     """Single-lead and batch scoring with an explainable breakdown."""
 
-    def __init__(self, native: NativeEngine | None = None) -> None:
-        self._native = native or NativeEngine.get()
-
     def score(self, lead: "Lead") -> tuple[float, dict[str, float]]:
         flags = channel_flags(lead)
         social_count = min(len(lead.social_links), 255)
         bucket = FRESHNESS_BUCKET.get(
             getattr(getattr(lead, "freshness", None), "age_class", "older"), 4
         )
-        priorities, digitals = self._native.score_batch(
-            [flags], [social_count], [bucket]
-        )
+        priorities, digitals = score_batch([flags], [social_count], [bucket])
         lead.priority_score = round(priorities[0], 1)
         lead.digital_score = digitals[0]
         lead.score_breakdown = self.explain(lead)
         return lead.priority_score, lead.score_breakdown
 
     def score_many(self, leads: list["Lead"]) -> None:
-        """Batch path: one native call for the whole list (SoA layout)."""
+        """Batch path: one arithmetic pass for the whole list (SoA layout)."""
         if not leads:
             return
         flags = [channel_flags(l) for l in leads]
@@ -102,7 +91,7 @@ class LeadScorer:
             )
             for l in leads
         ]
-        priorities, digitals = self._native.score_batch(flags, socials, buckets)
+        priorities, digitals = score_batch(flags, socials, buckets)
         for lead, priority, digital in zip(leads, priorities, digitals):
             lead.priority_score = round(priority, 1)
             lead.digital_score = digital
@@ -127,6 +116,15 @@ class LeadScorer:
             factors["physical_location"] = WEIGHTS["physical_location"]
         if lead.latitude is not None and lead.longitude is not None:
             factors["geo_verified"] = WEIGHTS["geo_verified"]
+
+        # v4 Task 10 — inverted map/web-absence scoring: award the missing-
+        # presence opportunity instead of burying offline businesses.
+        if not lead.website:
+            factors["website_build_opportunity"] = WEIGHTS["website_build_opportunity"]
+        if not (lead.address and len(lead.address) > 5) and (
+            lead.latitude is None or lead.longitude is None
+        ):
+            factors["local_seo_opportunity"] = WEIGHTS["local_seo_opportunity"]
 
         digital = getattr(lead, "digital_score", None)
         if digital is None:

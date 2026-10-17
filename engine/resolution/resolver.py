@@ -1,6 +1,6 @@
 """Entity resolver orchestrator: the full v3.1 pipeline over a lead set.
 
-    leads -> features -> blocking -> native-batched name similarity
+    leads -> features -> blocking -> batched name similarity (rapidfuzz)
           -> evidence scoring -> classification (+ manual overrides)
           -> constrained clustering (existing clusters pre-seeded)
           -> canonical records + relations + review queue + decision log
@@ -20,14 +20,14 @@ enter ahead of the classifier: a pinned "same" forces the merge edge, a
 pinned "distinct" forces separation AND suppresses relations — the
 engine is not allowed to undo a human decision on a later run.
 
-Name similarity keeps v3.0's native fast path (one batched C call for
-all candidate pairs, bit-identical pure-Python fallback) and combines
-it with token-set Jaccard: ``max(levenshtein_ratio, token_jaccard)`` so
+Name similarity uses ``engine.fastops.NameMatcher`` (bit-set prefilter +
+rapidfuzz Levenshtein, one pass over candidate pairs) and combines it
+with token-set Jaccard: ``max(levenshtein_ratio, token_jaccard)`` so
 "Café Atlas" vs "Café Atlas Restaurant" and "Pharmacie Centrale" vs
 "Pharmacie Central" both score as the variants they are. A sentinel
 name is registered for records whose normalized name is empty: the
-native session skips empty strings, which would silently shift every
-later index (latent v3.0 bug, now impossible).
+matcher skips empty strings, which would silently shift every later
+index (latent v3.0 bug, now impossible).
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from typing import Optional
 
 from config.settings import get_settings
 from domain.models import Lead
-from engine.native import NativeEngine
+from engine.fastops import NameMatcher
 from engine.resolution.blocking import build_candidate_pairs
 from engine.resolution.canonical import CanonicalBuilder
 from engine.resolution.classifier import (
@@ -128,13 +128,13 @@ class EntityResolver:
 
     def __init__(
         self,
-        native: Optional[NativeEngine] = None,
+        matcher: Optional[NameMatcher] = None,
         max_block_size: Optional[int] = None,
         jaccard_prefilter: Optional[float] = None,
         classifier: Optional[MatchClassifier] = None,
     ) -> None:
         settings = get_settings()
-        self._native = native or NativeEngine.get()
+        self._matcher = matcher or NameMatcher()
         self._max_block = max_block_size or settings.ENTITY_MAX_BLOCK_SIZE
         self._prefilter = jaccard_prefilter or settings.ENTITY_JACCARD_PREFILTER
         self._classifier = classifier or MatchClassifier()
@@ -159,7 +159,7 @@ class EntityResolver:
         mode = "incremental" if new_indices is not None else "batch"
         result = ResolutionResult(
             input_count=len(leads),
-            engine="native-simd" if self._native.is_native else "python-fallback",
+            engine="fastops-python",
             mode=mode,
         )
         if len(leads) < 2:
@@ -177,12 +177,12 @@ class EntityResolver:
         result.candidate_pairs = len(pairs)
         result.blocking = kind_counts
 
-        # ---------------- name similarity (native batch) ----------------
+        # ---------------- name similarity (batched matcher) -------------
         name_sims: list[float] = []
         if pairs:
-            self._native.names_reset(len(features))
-            self._native.names_add_many([f.name_k or _NAME_SENTINEL for f in features])
-            raw_sims = self._native.names_match_pairs(
+            self._matcher.reset(len(features))
+            self._matcher.add_many([f.name_k or _NAME_SENTINEL for f in features])
+            raw_sims = self._matcher.match_pairs(
                 pairs, self._prefilter, 0.0
             )
             for (ia, ib), sim in zip(pairs, raw_sims):

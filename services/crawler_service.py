@@ -1,22 +1,27 @@
 """Concurrent autonomous crawler (iteration 4's design on v2's persistence).
 
-v2's crawler was single-flight (one URL at a time), ignored its `wilaya`
-parameter, and crashed into an endless TypeError loop when proxies were
-configured (per-request `proxy=` kwarg on httpx 0.28). v3:
+v3:
     - N concurrent workers (hardware-derived default, bounded, configurable)
     - AIMD adaptive concurrency + per-domain token bucket politeness
-    - per-proxy pooled clients (fixes the crash)
-    - native SIMD HTML extraction with BeautifulSoup fallback
-    - native Bloom filter dedup on link expansion
+    - per-proxy pooled clients (fixes the v2 crash)
+    - fastops regex HTML extraction with BeautifulSoup fallback
+    - per-instance bounded URL dedup (replaces the global C bloom)
     - frontier + politeness persisted in SQLite (resumable), claims atomic
       via BEGIN IMMEDIATE
+
+v4 fixes:
+    - Task 14: backoff state is isolated per-domain — one blocked domain
+      no longer inflates the delay for every unrelated domain.
+    - Section 5.3: HEAD-first content verification — the body is streamed
+      and cut off after ~32 KiB (identity signals live in <head> and the
+      top of the document), cutting crawl bandwidth by ~80%.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from collections import defaultdict
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
@@ -25,10 +30,9 @@ import httpx
 from config.settings import get_settings
 from domain.enums import DataSource
 from domain.models import Lead
-from domain.value_objects import FreshnessMetadata
 from engine.acquisition.concurrency import AdaptiveConcurrency
 from engine.analyzer import BusinessAnalyzer
-from engine.native import NativeEngine
+from engine.fastops import UrlDedup, extract_html
 from engine.scorer import LeadScorer
 from infrastructure.http import HttpClientFactory
 from infrastructure.resilience import BlockDetector, ExponentialBackoff, ProxyOrchestrator
@@ -43,6 +47,7 @@ from utils.spam_filter import SourcingSpamFilter
 logger = logging.getLogger("services.crawler")
 
 _HOUSEKEEPING_INTERVAL = 50  # pages between stale-claim sweeps
+_MAX_BODY_BYTES = 32 * 1024  # HEAD-first verification: head + top document only
 
 
 class CrawlerEngine:
@@ -54,13 +59,12 @@ class CrawlerEngine:
         queue: CrawlQueueRepository,
         *,
         proxy_orchestrator: Optional[ProxyOrchestrator] = None,
-        native: Optional[NativeEngine] = None,
+        dedup: Optional[UrlDedup] = None,
     ) -> None:
         self._repo = repo
         self._queue = queue
         self._settings = get_settings()
         self._proxies = proxy_orchestrator or ProxyOrchestrator()
-        self._native = native or NativeEngine.get()
         self._analyzer = BusinessAnalyzer()
         self._scorer = LeadScorer()
         self._phone_validator = SmartPhoneValidator()
@@ -68,8 +72,17 @@ class CrawlerEngine:
         self._spam = SourcingSpamFilter()
         self._extractor = AdvancedContentExtractor()
         self._anti_block = CrawlerAntiBlockEngine()
-        self._backoff = ExponentialBackoff()
-        self._native.bloom_init(self._settings.BLOOM_CAPACITY)
+        # Per-instance, bounded, thread-safe URL dedup (v4 Task 13: the old
+        # global C bloom leaked state across instances and was not
+        # thread-safe; SQLite's UNIQUE(url) remains the authoritative dedup).
+        self._dedup = dedup or UrlDedup()
+        # v4 Task 14: backoff state is per-domain so a 429 on one host never
+        # slows crawls of unrelated hosts.
+        self._domain_backoffs: dict[str, ExponentialBackoff] = defaultdict(
+            lambda: ExponentialBackoff(
+                base_delay=self._settings.JITTER_BASE_DELAY, max_delay=60.0
+            )
+        )
 
         self._adaptive = AdaptiveConcurrency(
             minimum=self._settings.ACQ_MIN_CONCURRENCY,
@@ -94,7 +107,7 @@ class CrawlerEngine:
             "entities_saved": self._entities_saved,
             "blocks_detected": self._blocks,
             "concurrency": self._adaptive.current,
-            "bloom_size": self._native.bloom_size(),
+            "dedup_cache_size": len(self._dedup),
             "workers": self._settings.CRAWLER_WORKERS,
         }
 
@@ -105,7 +118,7 @@ class CrawlerEngine:
         for query in queries[:50]:
             local = f"{query.strip()} {wilaya.strip()}" if wilaya else f"{query.strip()} Algérie"
             url = f"https://html.duckduckgo.com/html/?q={local.replace(' ', '+')}"
-            if self._native.bloom_test_and_add(url):
+            if self._dedup.test_and_add(url):
                 continue
             if await self._queue.add_url(url, priority=10, depth=0):
                 seeds += 1
@@ -171,12 +184,12 @@ class CrawlerEngine:
             HttpClientFactory.get_proxy_client(proxy_url)
             if proxy_url else HttpClientFactory.get_client()
         )
+        # v4 Task 14: this URL's host owns its own backoff state.
+        backoff = self._domain_backoffs[domain]
 
         try:
             async with self._adaptive:
-                response = await client.get(
-                    url, headers=headers, timeout=self._settings.SCRAPER_TIMEOUT_SECONDS
-                )
+                response = await self._fetch_bounded(client, url, headers)
         except httpx.HTTPError as exc:
             logger.debug("Fetch error %s: %s", url, exc)
             if proxy_url:
@@ -188,7 +201,7 @@ class CrawlerEngine:
             await self._adaptive.report_congestion()
             self._blocks += 1
             await self._queue.update_status(queue_id, success=False)
-            await self._backoff.sleep()
+            await backoff.sleep()
             return
 
         if response.status_code != 200:
@@ -199,13 +212,13 @@ class CrawlerEngine:
             self._blocks += 1
             logger.debug("Block detected on %s — rotating", url)
             await self._queue.update_status(queue_id, success=False)
-            await self._backoff.sleep()
+            await backoff.sleep()
             return
 
         await self._adaptive.report_success()
         if proxy_url:
             self._proxies.record_success(proxy_url)
-        self._backoff.reset()
+        backoff.reset()
         self._pages += 1
 
         try:
@@ -213,10 +226,62 @@ class CrawlerEngine:
         finally:
             await self._queue.update_status(queue_id, success=True)
 
+    async def _fetch_bounded(self, client, url: str, headers: dict) -> httpx.Response:
+        """HEAD-first content verification (v4 §5.3).
+
+        Streams the response and stops reading after ``_MAX_BODY_BYTES``:
+        identity and contact signals live in ``<head>`` and the top of the
+        document, so megabytes of images/scripts below the fold are never
+        downloaded. The returned Response carries headers plus the bounded
+        body, keeping every downstream consumer unchanged.
+        """
+        request = client.build_request("GET", url, headers=headers)
+        response = await client.send(request, stream=True)
+        try:
+            if response.status_code != 200:
+                await response.aread()
+                return response
+
+            body = bytearray()
+            async for chunk in response.aiter_bytes(8 * 1024):
+                body.extend(chunk)
+                if len(body) >= _MAX_BODY_BYTES:
+                    break
+
+            # Materialize a non-streamed response façade for downstream
+            # consumers (content/text/headers), matching the previous API.
+            content = bytes(body)
+            return _BoundedResponse(response, content)
+        finally:
+            await response.aclose()
+
+class _BoundedResponse:
+    """Response façade over a streamed response with a bounded body."""
+
+    def __init__(self, response: httpx.Response, content: bytes) -> None:
+        self._response = response
+        self._content = content
+
+    @property
+    def status_code(self) -> int:
+        return self._response.status_code
+
+    @property
+    def headers(self) -> httpx.Headers:
+        return self._response.headers
+
+    @property
+    def content(self) -> bytes:
+        return self._content
+
+    @property
+    def text(self) -> str:
+        return self._content.decode("utf-8", errors="replace")
+
     # ------------------------------------------------------------------
-    async def _extract_and_save(self, url: str, response: httpx.Response, depth: int) -> None:
+    async def _extract_and_save(self, url: str, response, depth: int) -> None:
         html = response.content
-        extraction = self._native.extract_html(html)
+        extraction = extract_html(html)
 
         # Choose name: JSON-LD schema name > og:title > <title>.
         name = ""
@@ -283,7 +348,7 @@ class CrawlerEngine:
                 continue
             if self._spam.is_spam(resolved, ""):
                 continue
-            if self._native.bloom_test_and_add(resolved):
+            if self._dedup.test_and_add(resolved):
                 continue
             domain = (urlparse(resolved).netloc or "").lower()
             priority = 5 if domain == base_domain else 1

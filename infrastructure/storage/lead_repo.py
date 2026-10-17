@@ -59,7 +59,21 @@ class LeadRepository:
     # Writes
     # ------------------------------------------------------------------
     async def upsert(self, lead: Lead) -> tuple[int, bool]:
-        """Insert or merge by fingerprint. Returns (lead_id, created)."""
+        """Insert or merge by fingerprint. Returns (lead_id, created).
+
+        v4 Task 6 — race-free by construction:
+          * the write itself is a single native ``INSERT ... ON CONFLICT
+            DO UPDATE`` statement (atomic in SQLite, no SELECT/INSERT
+            window for concurrent writers to collide in), and
+          * it runs inside ``immediate_connection`` (BEGIN IMMEDIATE),
+            which serialises writers up front so the existence probe
+            used for the created/merged flag is snapshot-consistent.
+
+        The merge policy mirrors the historical UPDATE exactly: richer
+        values win, scores take the max, and CRM state (name, industry,
+        wilaya, status, tags, is_contact, notes) is never clobbered by a
+        re-scrape.
+        """
         fp = lead.fingerprint()
         now = _now_iso()
         if not lead.discovered_at.tzinfo:
@@ -76,55 +90,12 @@ class LeadRepository:
         tags_json = json.dumps(lead.tags, ensure_ascii=False)
 
         def _execute() -> tuple[int, bool]:
-            with self._db.connection() as conn:
-                existing = conn.execute(
-                    "SELECT id FROM leads WHERE fingerprint = ?", (fp,)
-                ).fetchone()
-                if existing:
-                    # Merge: keep the richer value for every field.
-                    conn.execute(
-                        """
-                        UPDATE leads SET
-                            address = COALESCE(?, address),
-                            website = COALESCE(?, website),
-                            phone = COALESCE(?, phone),
-                            email = COALESCE(?, email),
-                            social_links = CASE WHEN ? != '[]' THEN ? ELSE social_links END,
-                            phone_details = CASE WHEN ? != '[]' THEN ? ELSE phone_details END,
-                            freshness = ?,
-                            digital_score = COALESCE(?, digital_score),
-                            digital_tier = COALESCE(?, digital_tier),
-                            gaps = ?,
-                            recommended_services = ?,
-                            cta_fr = ?,
-                            cta_ar = ?,
-                            analysis_model = COALESCE(?, analysis_model),
-                            priority_score = MAX(?, priority_score),
-                            score_breakdown = ?,
-                            rating = MAX(?, rating),
-                            review_count = MAX(?, review_count),
-                            latitude = COALESCE(?, latitude),
-                            longitude = COALESCE(?, longitude),
-                            updated_at = ?
-                        WHERE fingerprint = ?
-                        """,
-                        (
-                            lead.address, lead.website, lead.phone, lead.email,
-                            social_json, social_json,
-                            phones_json, phones_json,
-                            lead.freshness.model_dump_json(),
-                            lead.digital_score, lead.digital_tier,
-                            gaps_json, services_json,
-                            lead.cta_fr, lead.cta_ar, lead.analysis_model,
-                            lead.priority_score, breakdown_json,
-                            lead.rating, lead.review_count,
-                            lead.latitude, lead.longitude,
-                            now, fp,
-                        ),
-                    )
-                    return int(existing["id"]), False
+            with self._db.immediate_connection() as conn:
+                existed = conn.execute(
+                    "SELECT 1 FROM leads WHERE fingerprint = ?", (fp,)
+                ).fetchone() is not None
 
-                conn.execute(
+                cur = conn.execute(
                     """
                     INSERT INTO leads (
                         fingerprint, name, industry, wilaya, address, website, phone, email,
@@ -133,6 +104,29 @@ class LeadRepository:
                         recommended_services, cta_fr, cta_ar, analysis_model, priority_score,
                         score_breakdown, status, tags, is_contact, notes, discovered_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(fingerprint) DO UPDATE SET
+                        address = COALESCE(excluded.address, leads.address),
+                        website = COALESCE(excluded.website, leads.website),
+                        phone = COALESCE(excluded.phone, leads.phone),
+                        email = COALESCE(excluded.email, leads.email),
+                        social_links = CASE WHEN excluded.social_links != '[]' THEN excluded.social_links ELSE leads.social_links END,
+                        phone_details = CASE WHEN excluded.phone_details != '[]' THEN excluded.phone_details ELSE leads.phone_details END,
+                        freshness = excluded.freshness,
+                        digital_score = COALESCE(excluded.digital_score, leads.digital_score),
+                        digital_tier = COALESCE(excluded.digital_tier, leads.digital_tier),
+                        gaps = CASE WHEN excluded.gaps != '[]' THEN excluded.gaps ELSE leads.gaps END,
+                        recommended_services = CASE WHEN excluded.recommended_services != '[]' THEN excluded.recommended_services ELSE leads.recommended_services END,
+                        cta_fr = CASE WHEN excluded.cta_fr != '' THEN excluded.cta_fr ELSE leads.cta_fr END,
+                        cta_ar = CASE WHEN excluded.cta_ar != '' THEN excluded.cta_ar ELSE leads.cta_ar END,
+                        analysis_model = COALESCE(excluded.analysis_model, leads.analysis_model),
+                        priority_score = MAX(excluded.priority_score, leads.priority_score),
+                        score_breakdown = CASE WHEN excluded.score_breakdown != '{}' THEN excluded.score_breakdown ELSE leads.score_breakdown END,
+                        rating = MAX(excluded.rating, leads.rating),
+                        review_count = MAX(excluded.review_count, leads.review_count),
+                        latitude = COALESCE(excluded.latitude, leads.latitude),
+                        longitude = COALESCE(excluded.longitude, leads.longitude),
+                        updated_at = excluded.updated_at
+                    RETURNING id
                     """,
                     (
                         fp, lead.name, lead.industry, lead.wilaya, lead.address, lead.website,
@@ -147,10 +141,8 @@ class LeadRepository:
                         discovered, now,
                     ),
                 )
-                row = conn.execute(
-                    "SELECT id FROM leads WHERE fingerprint = ?", (fp,)
-                ).fetchone()
-                return int(row["id"] if row else 0), True
+                row = cur.fetchone()
+                return (int(row["id"]) if row else 0), not existed
 
         return await asyncio.to_thread(_execute)
 
@@ -186,6 +178,7 @@ class LeadRepository:
 
     async def list_leads(
         self,
+        q: Optional[str] = None,
         wilaya: Optional[str] = None,
         industry: Optional[str] = None,
         status: Optional[str] = None,
@@ -199,8 +192,17 @@ class LeadRepository:
         offset: int = 0,
         exclude_rejected: bool = True,
     ) -> list[Lead]:
+        """Unified listing: full-text search (``q``) AND every structured
+        filter compose in a single query (v4 Task 5 — the old UI had to
+        switch to /leads/search and silently drop all other filters)."""
         clauses: list[str] = []
         params: list[Any] = []
+
+        if q and q.strip():
+            phrase = fts_sanitize(q.strip())
+            if phrase:
+                clauses.append("leads.id IN (SELECT rowid FROM leads_fts WHERE leads_fts MATCH ?)")
+                params.append(phrase)
 
         if min_score > 0:
             clauses.append("priority_score >= ?")
@@ -464,6 +466,33 @@ class LeadRepository:
         def _execute() -> int:
             with self._db.connection() as conn:
                 return conn.execute("SELECT COUNT(*) FROM leads").fetchone()[0]
+        return await asyncio.to_thread(_execute)
+
+    async def count_by_wilaya(self) -> dict[str, int]:
+        """Aggregated lead counts per wilaya (lowercase name -> n).
+
+        Used by the geographic catalogue — a GROUP BY instead of loading
+        rows, per the performance contract (aggregate before transport)."""
+
+        def _execute() -> dict[str, int]:
+            with self._db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT LOWER(wilaya) AS w, COUNT(*) AS n FROM leads "
+                    "WHERE wilaya != '' AND wilaya IS NOT NULL GROUP BY w"
+                ).fetchall()
+                return {r["w"]: r["n"] for r in rows}
+
+        return await asyncio.to_thread(_execute)
+
+    async def count_geolocated(self) -> int:
+        """Leads with GPS coordinates (map overlay sizing)."""
+
+        def _execute() -> int:
+            with self._db.connection() as conn:
+                return conn.execute(
+                    "SELECT COUNT(*) FROM leads WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+                ).fetchone()[0]
+
         return await asyncio.to_thread(_execute)
 
     # ------------------------------------------------------------------

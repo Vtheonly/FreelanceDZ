@@ -5,12 +5,12 @@ from __future__ import annotations
 from domain.enums import DataSource
 from domain.models import Lead
 from engine.analyzer import BusinessAnalyzer, TIER_HIGH_OPPORTUNITY, TIER_MATURE
-from engine.resolver import GraphEntityResolver, GoldenRecordBuilder
-from engine.scorer import LeadScorer, channel_flags
-from engine.native import (
+from engine.fastops import (
     FLAG_ADDRESS, FLAG_EMAIL, FLAG_GEO, FLAG_MOBILE, FLAG_PHONE,
     FLAG_SOCIAL, FLAG_SSL, FLAG_WEBSITE, FLAG_WHATSAPP,
 )
+from engine.resolver import GraphEntityResolver, GoldenRecordBuilder
+from engine.scorer import LeadScorer, channel_flags
 from domain.value_objects import PhoneDetails
 
 
@@ -187,10 +187,11 @@ def test_golden_record_builder():
     assert record["confidence"] >= 0.8
 
 
-def test_resolver_native_fallback_parity():
-    """Same input through native and fallback must produce identical clusters."""
-    import random
-    rng = random.Random(4)
+def test_resolver_deterministic_reproducibility():
+    """Same input through two independent resolver instances must produce
+    identical clusters (the old native-vs-fallback parity guarantee is now
+    trivially held by the single fastops implementation; the remaining risk
+    this guards against is hidden mutable state between runs)."""
     base_names = [
         "Pharmacie Centrale", "Pharmacie Central", "Boulangerie La Rose",
         "Boulangerie Larose", "Menuiserie El Nour", "Menuiserie Nour",
@@ -200,11 +201,10 @@ def test_resolver_native_fallback_parity():
         _lead(name=base_names[i], wilaya="Alger", phone=f"+2135501234{i:02d}")
         for i in range(len(base_names))
     ]
-    # Fallback engine instance.
-    from engine.native import NativeEngine
-    fallback_resolver = GraphEntityResolver(native=NativeEngine.__new__(NativeEngine))
-    fallback_resolver._native._lib = None
 
-    clusters_native, _ = GraphEntityResolver().resolve(leads)
-    clusters_fallback, _ = fallback_resolver.resolve(leads)
-    assert clusters_native == clusters_fallback
+    clusters_a, report_a = GraphEntityResolver().resolve(leads)
+    clusters_b, report_b = GraphEntityResolver().resolve(leads)
+    assert clusters_a == clusters_b
+    dict_a, dict_b = report_a.to_dict(), report_b.to_dict()
+    dict_a.pop("duration_seconds"), dict_b.pop("duration_seconds")  # wall-clock
+    assert dict_a == dict_b

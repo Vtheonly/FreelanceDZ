@@ -67,9 +67,13 @@ class DatabaseManager:
         )
         conn.row_factory = sqlite3.Row
         try:
-            conn.execute("PRAGMA journal_mode = WAL;")
+            # v4 Task 15: journal_mode=WAL is a database-level persistent
+            # setting — re-declaring it per connection acquires an exclusive
+            # lock to verify WAL status on every operation. It is set once
+            # in initialise(); here we only tune per-connection behaviour.
             conn.execute("PRAGMA foreign_keys = ON;")
             conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA busy_timeout = 5000;")
             yield conn
             conn.commit()
         except Exception:
@@ -93,9 +97,9 @@ class DatabaseManager:
         )
         conn.row_factory = sqlite3.Row
         try:
-            conn.execute("PRAGMA journal_mode = WAL;")
             conn.execute("PRAGMA foreign_keys = ON;")
             conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA busy_timeout = 5000;")
             conn.execute("BEGIN IMMEDIATE;")
             yield conn
             conn.execute("COMMIT;")
@@ -111,6 +115,9 @@ class DatabaseManager:
     # ------------------------------------------------------------------
     def initialise(self) -> None:
         with self._lock, self.connection() as conn:
+            # WAL is switched on exactly once per database lifetime (v4
+            # Task 15); the mode persists in the file itself.
+            conn.execute("PRAGMA journal_mode = WAL;")
             self._reconcile_legacy_tables(conn)
             # Explicit BEGIN/COMMIT makes the baseline all-or-nothing:
             # executescript otherwise autocommits statement by statement,
@@ -500,3 +507,32 @@ def _migrate_resolution_v31(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "entity_clusters", "evidence_summary", "TEXT", "'{}'")
 
     logger.info("entity resolution v3.1 tables ready")
+
+
+# ---------------------------------------------------------------------------
+# Migration 10 — checkpoints: geographic POIs for field operations
+# (refactorv5 Step 4). Created idempotently for fresh installs and
+# pre-existing databases alike.
+# ---------------------------------------------------------------------------
+@DatabaseManager.register_migration(10, "add checkpoints table for POI geospatial tracking")
+def _migrate_checkpoints(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            category    TEXT NOT NULL DEFAULT 'prospect',
+            wilaya      TEXT NOT NULL DEFAULT '',
+            latitude    REAL NOT NULL,
+            longitude   REAL NOT NULL,
+            notes       TEXT,
+            status      TEXT NOT NULL DEFAULT 'active',
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_wilaya ON checkpoints (wilaya)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_category ON checkpoints (category)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_status ON checkpoints (status)")
+    logger.info("checkpoints table and indices verified")

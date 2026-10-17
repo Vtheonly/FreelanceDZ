@@ -10,6 +10,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from api.routes import checkpoints as checkpoints_routes
+from api.routes import geo as geo_routes
 from api.routes import leads as leads_routes
 from api.routes import misc as misc_routes
 from config.settings import get_settings
@@ -61,6 +63,8 @@ def create_app() -> FastAPI:
     app.include_router(misc_routes.export_router)
     app.include_router(misc_routes.crawler_router)
     app.include_router(misc_routes.analytics_router)
+    app.include_router(geo_routes.geo_router)
+    app.include_router(checkpoints_routes.checkpoints_router)
 
     @app.get("/api", include_in_schema=False)
     async def route_index():

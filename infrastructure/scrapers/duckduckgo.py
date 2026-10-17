@@ -7,10 +7,14 @@ persistence start on the FIRST page while later pages are still in flight
 
 Two-layer extraction is preserved from v2.0.0 (its strongest idea):
     Layer 1 — SERP title/snippet -> Lead with phones/email/freshness.
-    Layer 2 — optional deep crawl of result pages using the NATIVE SIMD
-    zero-copy scanner first (title/meta/links/tel/mailto/JSON-LD pointer),
-    falling back to BeautifulSoup + AdvancedContentExtractor only when the
-    fast scanner finds no signal (malformed pages, heavy JS markup).
+    Layer 2 — optional deep crawl of result pages using the fastops regex
+    scanner first (title/meta/links/tel/mailto/JSON-LD pointer), falling
+    back to BeautifulSoup + AdvancedContentExtractor only when the fast
+    scanner finds no signal (malformed pages, heavy JS markup).
+
+v4 Task 9 — telephony area-code / text geo-inference: online-only
+businesses with a landline and no map pin recover their wilaya from the
+ARPT area code, else from a wilaya mention in the snippet.
 """
 
 from __future__ import annotations
@@ -25,12 +29,13 @@ from bs4 import BeautifulSoup
 from domain.enums import DataSource
 from domain.models import Lead
 from domain.value_objects import FreshnessMetadata
-from engine.native import NativeEngine
+from engine.fastops import extract_html
 from infrastructure.scrapers.base import BaseAsyncScraper
 from infrastructure.scrapers.content_extractor import AdvancedContentExtractor
 from utils.anti_block_engine import CrawlerAntiBlockEngine
 from utils.contact_parser import extract_first_email, extract_social_links
 from utils.freshness_detector import FreshnessDetector
+from utils.geo_inference import infer_wilaya_from_phone, infer_wilaya_from_text
 from utils.phone_validator import SmartPhoneValidator
 from utils.url_utils import clean_url, unwrap_ddg_url
 
@@ -48,7 +53,6 @@ class DuckDuckGoScraper(BaseAsyncScraper):
         self._phone_validator = SmartPhoneValidator()
         self._freshness = FreshnessDetector()
         self._extractor = AdvancedContentExtractor()
-        self._native = NativeEngine.get()
         self._deep_crawl = deep_crawl
 
     @property
@@ -150,6 +154,16 @@ class DuckDuckGoScraper(BaseAsyncScraper):
             freshness=freshness,
         )
 
+        # v4 Task 9 — recover the wilaya for online-only businesses: ARPT
+        # landline area code first, then a wilaya mention in the snippet.
+        if not lead.wilaya:
+            inferred = (
+                infer_wilaya_from_phone(lead.phone)
+                or infer_wilaya_from_text(text)
+            )
+            if inferred:
+                lead.wilaya = inferred
+
         # Layer 2: deep enrichment for business-looking pages.
         try:
             is_social = any(
@@ -170,8 +184,8 @@ class DuckDuckGoScraper(BaseAsyncScraper):
             return
         html = response.content
 
-        # Native SIMD fast path (zero-copy structural scan).
-        extraction = self._native.extract_html(html)
+        # fastops regex scanner (zero-DOM structural pass).
+        extraction = extract_html(html)
         json_ld_text = extraction.json_ld or None
 
         if extraction.has_signal and json_ld_text:

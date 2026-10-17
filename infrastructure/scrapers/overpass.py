@@ -4,6 +4,14 @@ Carried over from v2.0.0 (its OSM tag mapping and QL construction were
 solid): trilingual keyword->tag filters, two rotating endpoints, area
 filtering by wilaya. v3 changes: yields Leads through the shared streaming
 interface and uses the unified domain model.
+
+v4 Task 8 — OpenStreetMap is an *asymmetric oracle*, not a gatekeeper:
+    * a missing wilaya no longer skips the source — the query falls back
+      to the national bounding box so nationwide campaigns still get map
+      presence for geolocated businesses;
+    * any Overpass failure degrades silently inside the aggregator (the
+      per-scraper pump isolates exceptions), so web discovery proceeds
+      regardless of OSM availability.
 """
 
 from __future__ import annotations
@@ -11,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import AsyncIterator, Optional
 
-from config.wilayas import get_wilaya_by_name
+from config.wilayas import ALGERIA_BBOX, get_wilaya_by_name
 from domain.enums import DataSource
 from domain.models import Lead
 from domain.value_objects import FreshnessMetadata
@@ -25,6 +33,10 @@ OVERPASS_ENDPOINTS: tuple[str, ...] = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 )
+
+# National bounding box (v4 Task 8: nationwide fallback when no wilaya is
+# given — south,west,north,east as Overpass expects).
+_ALGERIA_BBOX_STR = f"{ALGERIA_BBOX[1]},{ALGERIA_BBOX[0]},{ALGERIA_BBOX[3]},{ALGERIA_BBOX[2]}"
 
 _OSM_TAG_TO_INDUSTRY: dict[str, str] = {
     "amenity=pharmacy": "Pharmacy",
@@ -119,22 +131,22 @@ class OverpassScraper(BaseAsyncScraper):
     async def stream_discover(
         self, query: str, wilaya: Optional[str] = None, limit: int = 30
     ) -> AsyncIterator[Lead]:
-        if not wilaya:
-            return  # Overpass requires an area; DDG covers the no-wilaya case.
-
+        # v4 Task 8: no wilaya -> nationwide bbox query instead of skipping
+        # the source entirely (web discovery covers the rest as always).
         area_declaration, area_filter = self._area_filter(wilaya)
         tag_filters = self._osm_filters(query)
         if not tag_filters:
             return
 
         tag_union = ";\n".join(f"  {t}{area_filter};" for t in tag_filters)
+        out_limit = max(limit * 2, 80) if wilaya else max(limit, 60)
         ql = f"""
         [out:json][timeout:25];
         {area_declaration}
         (
         {tag_union}
         );
-        out center {max(limit * 2, 80)};
+        out center {out_limit};
         """
 
         data = await self._query(ql)
@@ -143,7 +155,7 @@ class OverpassScraper(BaseAsyncScraper):
 
         seen: set[str] = set()
         yielded = 0
-        for lead in self._parse_elements(data.get("elements", []), query, wilaya):
+        for lead in self._parse_elements(data.get("elements", []), query, wilaya or ""):
             fp = lead.fingerprint()
             if fp in seen:
                 continue
@@ -168,7 +180,11 @@ class OverpassScraper(BaseAsyncScraper):
         return None
 
     @staticmethod
-    def _area_filter(wilaya: str) -> tuple[str, str]:
+    def _area_filter(wilaya: Optional[str]) -> tuple[str, str]:
+        """Area declaration + filter suffix. With a wilaya: named OSM area.
+        Without: the national bounding box (v4 Task 8 fallback)."""
+        if not wilaya:
+            return "", f"({_ALGERIA_BBOX_STR})"
         w = get_wilaya_by_name(wilaya)
         name = str(w["name_fr"]) if w else wilaya
         safe = name.replace('"', '\\"')

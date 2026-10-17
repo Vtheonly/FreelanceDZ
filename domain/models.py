@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domain.enums import DataSource, FreshnessAge, LeadStatus, PhoneType
 from domain.value_objects import FreshnessMetadata, PhoneDetails
@@ -23,6 +24,46 @@ from domain.value_objects import FreshnessMetadata, PhoneDetails
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def sanitize_website_url(url: Optional[str]) -> Optional[str]:
+    """Normalise or reject website URLs at the model boundary (XSS root cause).
+
+    Scraped ``website`` values flow into every client (old dashboard,
+    Streamlit UI, exports). A ``javascript:`` or ``data:`` URL stored here
+    would execute in any frontend that renders it as a link, so the scheme
+    allow-list is enforced once, at ingestion — every interface inherits
+    the guarantee.
+
+    Scheme-less input that looks like a domain ("cafeatlas.dz/contact")
+    is normalised to ``https://`` rather than dropped — manual entry and
+    sloppy scrapers produce that shape constantly. Anything else (unknown
+    schemes, bare text) is dropped (``None``).
+    """
+    if url is None:
+        return None
+    candidate = url.strip()
+    if not candidate:
+        return None
+    if candidate.startswith("//"):
+        candidate = "https:" + candidate
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        return None
+
+    if not parsed.scheme:
+        first_segment = candidate.split("/", 1)[0]
+        if "." in first_segment and " " not in first_segment and "@" not in first_segment:
+            candidate = "https://" + candidate
+            try:
+                parsed = urlparse(candidate)
+            except ValueError:
+                return None
+
+    if parsed.scheme in ("http", "https") and parsed.netloc:
+        return candidate
+    return None
 
 
 class Lead(BaseModel):
@@ -51,6 +92,11 @@ class Lead(BaseModel):
     source_url: Optional[str] = Field(default=None, max_length=1000)
     phone_details: list[PhoneDetails] = Field(default_factory=list)
     freshness: FreshnessMetadata = Field(default_factory=FreshnessMetadata)
+
+    @field_validator("website")
+    @classmethod
+    def _safe_website(cls, v: Optional[str]) -> Optional[str]:
+        return sanitize_website_url(v)
 
     # --- deterministic audit (engine.analyzer) ---------------------------
     digital_score: Optional[int] = Field(default=None, ge=0, le=100)
@@ -103,6 +149,28 @@ class Lead(BaseModel):
 
     def is_mobile_reachable(self) -> bool:
         return any(p.phone_type == PhoneType.MOBILE for p in self.phone_details)
+
+
+class Checkpoint(BaseModel):
+    """Geographic checkpoint / point of interest for field operations.
+
+    Persisted via ``infrastructure/storage/checkpoint_repo`` (migration 10)
+    and managed from the map UI: placing, inspecting, editing, and retiring
+    points of interest tied to real coordinates.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    id: Optional[int] = None
+    name: str = Field(..., min_length=1, max_length=200)
+    category: str = Field(default="prospect", max_length=50)  # prospect|client|partner|hub|competitor
+    wilaya: str = Field(default="", max_length=100)
+    latitude: float = Field(..., ge=-90.0, le=90.0)
+    longitude: float = Field(..., ge=-180.0, le=180.0)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    status: str = Field(default="active", max_length=50)     # active|visited|archived
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class CrawlTask(BaseModel):

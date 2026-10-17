@@ -65,6 +65,12 @@ class AppSettings(BaseSettings):
     ENABLE_OVERPASS_SCRAPER: bool = True
     ENABLE_DDG_SCRAPER: bool = True
     DEFAULT_QUERY_LIMIT: int = Field(default=30, ge=1, le=200)
+    # v4 Task 11 — dialect variants are capped (primary + best counterpart)
+    # instead of fanning 11 sequential searches per campaign.
+    DISCOVERY_MAX_VARIANTS: int = Field(default=2, ge=1, le=12)
+    # v4 §5.2 — optional local SearXNG metasearch (docker compose --profile
+    # searxng). Empty = disabled; the DDG scraper remains the default source.
+    SEARXNG_URL: str = ""
 
     # --- HTTP pool -----------------------------------------------------------
     HTTP_ENABLE_HTTP2: bool = True
