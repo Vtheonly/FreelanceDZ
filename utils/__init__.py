@@ -29,7 +29,6 @@ from utils.freshness_detector import FreshnessDetector
 from utils.spam_filter import SourcingSpamFilter
 from utils.query_expander import AlgerianQueryExpander, sanitise_query
 from utils.anti_block_engine import CrawlerAntiBlockEngine
-from utils.retry import retry_with_backoff
 
 __all__ = [
     # text
@@ -56,5 +55,4 @@ __all__ = [
     "AlgerianQueryExpander",
     "sanitise_query",
     "CrawlerAntiBlockEngine",
-    "retry_with_backoff",
 ]

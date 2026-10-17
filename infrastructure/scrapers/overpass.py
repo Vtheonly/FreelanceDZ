@@ -1,41 +1,31 @@
-"""Async OpenStreetMap Overpass scraper.
+"""Async OpenStreetMap Overpass scraper (streaming, adapted to unified Lead).
 
-Queries the Overpass API for businesses (amenity, shop, office, craft
-tags) near a given wilaya. Returns structured ``BusinessRaw`` records
-with geographic coordinates and OSM metadata.
-
-This replaces the original synchronous ``requests.get``-based scraper
-that blocked the FastAPI event loop. The async version uses the shared
-``httpx.AsyncClient`` and respects the global rate limiter.
+Carried over from v2.0.0 (its OSM tag mapping and QL construction were
+solid): trilingual keyword->tag filters, two rotating endpoints, area
+filtering by wilaya. v3 changes: yields Leads through the shared streaming
+interface and uses the unified domain model.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from config.wilayas import get_wilaya_by_name
 from domain.enums import DataSource
-from domain.models import BusinessRaw
+from domain.models import Lead
 from domain.value_objects import FreshnessMetadata
-from infrastructure.http.rate_limiter import AsyncRateLimiter, DomainRateLimiter
 from infrastructure.scrapers.base import BaseAsyncScraper
 from utils.freshness_detector import FreshnessDetector
 from utils.phone_validator import SmartPhoneValidator
 
+logger = logging.getLogger("scrapers.overpass")
 
-_logger = logging.getLogger("scrapers.overpass")
-
-
-# Overpass endpoints — we rotate between the two public instances for
-# resilience. The local SearXNG/proxy layer could also be used.
 OVERPASS_ENDPOINTS: tuple[str, ...] = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 )
 
-
-# Mapping from OSM top-level tags to our industry labels.
 _OSM_TAG_TO_INDUSTRY: dict[str, str] = {
     "amenity=pharmacy": "Pharmacy",
     "amenity=clinic": "Clinic",
@@ -64,253 +54,197 @@ _OSM_TAG_TO_INDUSTRY: dict[str, str] = {
     "craft=plumber": "Plumber",
 }
 
+_KEYWORD_TAG_MAP: dict[str, list[str]] = {
+    "pharmacie": ["amenity=pharmacy"],
+    "pharmacy": ["amenity=pharmacy"],
+    "صيدلية": ["amenity=pharmacy"],
+    "officine": ["amenity=pharmacy"],
+    "clinic": ["amenity=clinic", "amenity=hospital", "amenity=doctors"],
+    "clinique": ["amenity=clinic", "amenity=hospital", "amenity=doctors"],
+    "hospital": ["amenity=hospital"],
+    "hopital": ["amenity=hospital"],
+    "مستشفى": ["amenity=hospital"],
+    "عيادة": ["amenity=clinic", "amenity=doctors"],
+    "doctors": ["amenity=doctors"],
+    "dentist": ["amenity=dentist"],
+    "dentiste": ["amenity=dentist"],
+    "restaurant": ["amenity=restaurant", "amenity=fast_food"],
+    "resto": ["amenity=restaurant", "amenity=fast_food"],
+    "مطعم": ["amenity=restaurant", "amenity=fast_food"],
+    "pizzeria": ["amenity=restaurant"],
+    "cafe": ["amenity=cafe"],
+    "مقهى": ["amenity=cafe"],
+    "bakery": ["shop=bakery"],
+    "boulangerie": ["shop=bakery"],
+    "مخبزة": ["shop=bakery"],
+    "supermarket": ["shop=supermarket"],
+    "supermarche": ["shop=supermarket"],
+    "supérette": ["shop=convenience", "shop=supermarket"],
+    "سوبرماركت": ["shop=supermarket"],
+    "hairdresser": ["shop=hairdresser"],
+    "coiffure": ["shop=hairdresser"],
+    "حلاق": ["shop=hairdresser"],
+    "lawyer": ["office=lawyer"],
+    "avocat": ["office=lawyer"],
+    "محامي": ["office=lawyer"],
+    "real_estate": ["office=real_estate_agent"],
+    "immobilier": ["office=real_estate_agent"],
+    "عقارات": ["office=real_estate_agent"],
+    "car_repair": ["amenity=car_repair", "shop=car_repair"],
+    "mecanicien": ["amenity=car_repair", "shop=car_repair"],
+    "garage": ["amenity=car_repair", "shop=car_repair"],
+    "تصليح سيارات": ["amenity=car_repair"],
+    "plumber": ["craft=plumber"],
+    "plombier": ["craft=plumber"],
+    "ترصيص": ["craft=plumber"],
+}
 
-class AsyncOverpassScraper(BaseAsyncScraper):
-    """Async OpenStreetMap Overpass scraper."""
 
-    def __init__(
-        self,
-        client,
-        phone_validator: Optional[SmartPhoneValidator] = None,
-        freshness_detector: Optional[FreshnessDetector] = None,
-        rate_limiter: Optional[AsyncRateLimiter] = None,
-        domain_limiter: Optional[DomainRateLimiter] = None,
-    ) -> None:
-        super().__init__(
-            client=client,
-            rate_limiter=rate_limiter,
-            domain_limiter=domain_limiter,
-        )
-        self._phone_validator = phone_validator or SmartPhoneValidator()
-        self._freshness = freshness_detector or FreshnessDetector()
+class OverpassScraper(BaseAsyncScraper):
+    """Streaming OpenStreetMap Overpass scraper."""
+
+    def __init__(self, client, **kwargs) -> None:
+        super().__init__(client, **kwargs)
+        self._phone_validator = SmartPhoneValidator()
+        self._freshness = FreshnessDetector()
 
     @property
     def source_name(self) -> str:
         return "overpass"
 
-    async def discover(
-        self,
-        query: str,
-        wilaya: Optional[str] = None,
-        limit: int = 10,
-    ) -> list[BusinessRaw]:
-        """Query Overpass for businesses matching the query near ``wilaya``."""
-        if not query:
-            return []
-            
-        # Defensively skip country-wide searches to avoid throttling
+    # ------------------------------------------------------------------
+    async def discover(self, query: str, wilaya: Optional[str] = None, limit: int = 30) -> list[Lead]:
+        return [lead async for lead in self.stream_discover(query, wilaya, limit)]
+
+    async def stream_discover(
+        self, query: str, wilaya: Optional[str] = None, limit: int = 30
+    ) -> AsyncIterator[Lead]:
         if not wilaya:
-            self._logger.warning("Overpass query without wilaya is too heavy — skipping to prevent blocks.")
-            return []
-            
-        self._logger.info("Overpass discover: query=%r wilaya=%r limit=%d", query, wilaya, limit)
+            return  # Overpass requires an area; DDG covers the no-wilaya case.
 
-        # Build the Overpass QL query.
-        area_decl, area_filter = self._area_filter_and_declaration(wilaya)
-        osm_filters = self._osm_filters_for_query(query)
-        if not osm_filters:
-            self._logger.warning("No OSM tag mapping for query %r — skipping Overpass.", query)
-            return []
+        area_declaration, area_filter = self._area_filter(wilaya)
+        tag_filters = self._osm_filters(query)
+        if not tag_filters:
+            return
 
-        # Compose the union of every relevant tag.
-        union_parts = []
-        for tag_filter in osm_filters:
-            union_parts.append(
-                f'node[{tag_filter}]{area_filter};'
-                f'way[{tag_filter}]{area_filter};'
-            )
-        union = "".join(union_parts)
-        overpass_ql = f"[out:json][timeout:25];{area_decl}({union});out center 80;"
+        tag_union = ";\n".join(f"  {t}{area_filter};" for t in tag_filters)
+        ql = f"""
+        [out:json][timeout:25];
+        {area_declaration}
+        (
+        {tag_union}
+        );
+        out center {max(limit * 2, 80)};
+        """
 
-        # Try each endpoint until one responds.
+        data = await self._query(ql)
+        if data is None:
+            return
+
+        seen: set[str] = set()
+        yielded = 0
+        for lead in self._parse_elements(data.get("elements", []), query, wilaya):
+            fp = lead.fingerprint()
+            if fp in seen:
+                continue
+            seen.add(fp)
+            yielded += 1
+            yield lead
+            if yielded >= limit:
+                return
+
+    # ------------------------------------------------------------------
+    async def _query(self, ql: str) -> Optional[dict]:
         for endpoint in OVERPASS_ENDPOINTS:
             response = await self._fetch(
-                endpoint,
-                params={"data": overpass_ql},
-                timeout=30.0,
+                endpoint, params={"data": ql}, timeout=30.0
             )
             if response is None:
                 continue
             try:
-                data = response.json()
+                return response.json()
             except Exception as exc:
-                self._logger.warning("Overpass returned invalid JSON from %s: %s", endpoint, exc)
-                continue
-            businesses = self._parse_overpass_response(data, query, wilaya, limit)
-            self._logger.info("Overpass returned %d businesses from %s", len(businesses), endpoint)
-            return businesses
+                logger.debug("Overpass JSON decode failed from %s: %s", endpoint, exc)
+        return None
 
-        self._logger.warning("Every Overpass endpoint failed for query %r", query)
-        return []
-
-    # ------------------------------------------------------------------
-
-    def _area_filter_and_declaration(self, wilaya: Optional[str]) -> tuple[str, str]:
-        """Build the area declaration and filter for the Overpass query.
-
-        Returns (area_declaration, area_filter).
-        """
-        if not wilaya:
-            # Algeria relation area ID is 3600193111
-            return "", "(area:3600193111)"
-
-        # Try to canonicalise name using our wilayas config
+    @staticmethod
+    def _area_filter(wilaya: str) -> tuple[str, str]:
         w = get_wilaya_by_name(wilaya)
-        name_to_use = str(w["name_fr"]) if w else wilaya
+        name = str(w["name_fr"]) if w else wilaya
+        safe = name.replace('"', '\\"')
+        return f'area["name"~"^{safe}$",i]->.searchArea;', "(area.searchArea)"
 
-        safe = name_to_use.replace('"', '\\"')
-        # Use case-insensitive regex for robustness
-        declaration = f'area["name"~"^{safe}$",i]->.searchArea;'
-        area_filter = "(area.searchArea)"
-        return declaration, area_filter
-
-    def _osm_filters_for_query(self, query: str) -> list[str]:
-        """Map the user query to one or more OSM tag filters."""
-        q = query.lower().strip()
+    @staticmethod
+    def _osm_filters(query: str) -> list[str]:
+        q = (query or "").lower().strip()
         matches: list[str] = []
-
-        # Standard keyword mappings for French, Arabic, and English terms
-        mappings = {
-            "pharmacie": ["amenity=pharmacy"],
-            "pharmacy": ["amenity=pharmacy"],
-            "صيدلية": ["amenity=pharmacy"],
-            "officine": ["amenity=pharmacy"],
-            "clinic": ["amenity=clinic", "amenity=hospital", "amenity=doctors"],
-            "clinique": ["amenity=clinic", "amenity=hospital", "amenity=doctors"],
-            "hospital": ["amenity=hospital"],
-            "hopital": ["amenity=hospital"],
-            "مستشفى": ["amenity=hospital"],
-            "عيادة": ["amenity=clinic", "amenity=doctors"],
-            "doctors": ["amenity=doctors"],
-            "dentist": ["amenity=dentist"],
-            "dentiste": ["amenity=dentist"],
-            "restaurant": ["amenity=restaurant", "amenity=fast_food"],
-            "resto": ["amenity=restaurant", "amenity=fast_food"],
-            "مطعم": ["amenity=restaurant", "amenity=fast_food"],
-            "pizzeria": ["amenity=restaurant"],
-            "cafe": ["amenity=cafe"],
-            "مقهى": ["amenity=cafe"],
-            "bakery": ["shop=bakery"],
-            "boulangerie": ["shop=bakery"],
-            "مخبزة": ["shop=bakery"],
-            "supermarket": ["shop=supermarket"],
-            "supermarche": ["shop=supermarket"],
-            "supérette": ["shop=convenience", "shop=supermarket"],
-            "سوبرماركت": ["shop=supermarket"],
-            "hairdresser": ["shop=hairdresser"],
-            "coiffure": ["shop=hairdresser"],
-            "حلاق": ["shop=hairdresser"],
-            "lawyer": ["office=lawyer"],
-            "avocat": ["office=lawyer"],
-            "محامي": ["office=lawyer"],
-            "real_estate": ["office=real_estate_agent"],
-            "immobilier": ["office=real_estate_agent"],
-            "عقارات": ["office=real_estate_agent"],
-            "car_repair": ["amenity=car_repair", "shop=car_repair"],
-            "mecanicien": ["amenity=car_repair", "shop=car_repair"],
-            "garage": ["amenity=car_repair", "shop=car_repair"],
-            "تصليح سيارات": ["amenity=car_repair"],
-            "plumber": ["craft=plumber"],
-            "plombier": ["craft=plumber"],
-            "ترصيص": ["craft=plumber"],
-        }
-
-        # Check explicit mappings first
-        for key, tags in mappings.items():
+        for key, tags in _KEYWORD_TAG_MAP.items():
             if key in q or q in key:
                 matches.extend(tags)
-
-        # Substring search fallbacks
-        for tag, industry in _OSM_TAG_TO_INDUSTRY.items():
-            if q in tag.lower() or q in industry.lower():
+        for tag in _OSM_TAG_TO_INDUSTRY:
+            key = tag.partition("=")[2]
+            if key and (key in q or q in key):
                 matches.append(tag)
-
-        # General shop fallback
-        if not matches and any(w in q for w in ("shop", "store", "magasin", "hanout", "محل", "دكان")):
+        if not matches and any(
+            w in q for w in ("shop", "store", "magasin", "hanout", "محل", "دكان")
+        ):
             matches.append("shop")
-
-        # De-duplicate while preserving order
         seen: set[str] = set()
-        unique_matches: list[str] = []
-        for m in matches:
-            if m not in seen:
-                seen.add(m)
-                unique_matches.append(m)
+        return [m for m in matches if not (m in seen or seen.add(m))][:5]
 
-        return unique_matches[:5]
-
-    def _parse_overpass_response(
-        self,
-        data: dict,
-        query: str,
-        wilaya: Optional[str],
-        limit: int,
-    ) -> list[BusinessRaw]:
-        elements = data.get("elements", [])
-        businesses: list[BusinessRaw] = []
-        seen: set[str] = set()
-
+    def _parse_elements(
+        self, elements: list[dict], query: str, wilaya: str
+    ) -> list[Lead]:
+        leads: list[Lead] = []
         for el in elements:
             tags = el.get("tags", {}) or {}
             name = tags.get("name") or tags.get("name:fr") or tags.get("name:en")
             if not name:
                 continue
 
-            # Determine industry from the most specific OSM tag present.
-            industry = self._industry_for_tags(tags) or (query.title() if query else "Other")
-
             phone = tags.get("phone") or tags.get("contact:phone")
             email = tags.get("email") or tags.get("contact:email")
             website = tags.get("website") or tags.get("contact:website") or tags.get("url")
-            address_parts = [
-                tags.get("addr:housenumber"),
-                tags.get("addr:street"),
-                tags.get("addr:city"),
-                tags.get("addr:postcode"),
-            ]
-            address = ", ".join(p for p in address_parts if p) or None
+            address = ", ".join(
+                p for p in (
+                    tags.get("addr:housenumber"),
+                    tags.get("addr:street"),
+                    tags.get("addr:city"),
+                    tags.get("addr:postcode"),
+                ) if p
+            ) or None
 
-            # Coordinates — elements can be nodes (lat/lon) or ways (center).
-            lat = el.get("lat") or el.get("center", {}).get("lat")
-            lon = el.get("lon") or el.get("center", {}).get("lon")
+            lat = el.get("lat") or (el.get("center") or {}).get("lat")
+            lon = el.get("lon") or (el.get("center") or {}).get("lon")
 
-            phone_meta = []
-            if phone:
-                phone_meta = self._phone_validator.extract_and_validate(phone)
-
+            phone_details = self._phone_validator.extract_and_validate(phone) if phone else []
             freshness = FreshnessMetadata()
-            # OSM elements carry a timestamp in the ``timestamp`` field.
-            osm_ts = el.get("timestamp")
-            if osm_ts:
-                freshness = self._freshness.detect(osm_ts)
+            if el.get("timestamp"):
+                freshness = self._freshness.detect(str(el["timestamp"]))
 
-            biz = BusinessRaw(
-                name=name.strip()[:200],
-                industry=industry,
-                wilaya=wilaya or "Unknown",
+            leads.append(Lead(
+                name=str(name).strip()[:200],
+                industry=self._industry_for_tags(tags) or (query.title() if query else "Other"),
+                wilaya=wilaya,
                 address=address,
                 website=website,
-                phone=phone_meta[0].e164 if phone_meta else phone,
-                email=email.lower() if email else None,
-                social_media_handles=[],
+                phone=phone_details[0].e164 if phone_details else phone,
+                email=(email or "").lower() or None,
+                social_links=[],
                 rating=float(tags.get("stars", 0.0) or 0.0),
                 latitude=float(lat) if lat is not None else None,
                 longitude=float(lon) if lon is not None else None,
                 source=DataSource.OVERPASS,
-                source_url=f"https://www.openstreetmap.org/{el.get('type', 'node')}/{el.get('id', '')}",
-                phone_metadata=phone_meta,
+                source_url=(
+                    f"https://www.openstreetmap.org/{el.get('type', 'node')}/{el.get('id', '')}"
+                ),
+                phone_details=phone_details,
                 freshness=freshness,
-            )
-            fp = biz.fingerprint()
-            if fp in seen:
-                continue
-            seen.add(fp)
-            businesses.append(biz)
-            if len(businesses) >= limit:
-                break
-        return businesses
+            ))
+        return leads
 
-    def _industry_for_tags(self, tags: dict) -> Optional[str]:
+    @staticmethod
+    def _industry_for_tags(tags: dict) -> Optional[str]:
         for tag_key, industry in _OSM_TAG_TO_INDUSTRY.items():
             key, _, value = tag_key.partition("=")
             if tags.get(key) == value:

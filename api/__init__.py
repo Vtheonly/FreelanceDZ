@@ -1,5 +1,5 @@
-"""API package — async FastAPI server with modular route blueprints."""
+"""FastAPI application package."""
 
-from api.server import create_app
+from api.server import app, create_app
 
-__all__ = ["create_app"]
+__all__ = ["app", "create_app"]

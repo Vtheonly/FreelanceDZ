@@ -1,59 +1,27 @@
-"""Domain package — pure business models, free of I/O or framework concerns.
-
-Anything that touches the network, the database, or external services
-belongs in ``infrastructure`` or ``services``. This package only defines
-*what* the data looks like and *what* the rules are.
-"""
+"""Domain layer — pure models, enums, and value objects."""
 
 from domain.enums import (
     CrawlStatus,
     DataSource,
-    EntityType,
     FreshnessAge,
     LeadStatus,
     PhoneType,
     ProxyHealthState,
     ResolutionStrategy,
 )
-from domain.models import (
-    BusinessRaw,
-    CrawlTask,
-    Lead,
-    LeadAnalysis,
-    ProposedService,
-    ProxyNode,
-    RawRecord,
-    ResolvedEntity,
-)
-from domain.value_objects import (
-    Contact,
-    FreshnessMetadata,
-    GeoPoint,
-    PhoneDetails,
-)
+from domain.models import CrawlTask, Lead
+from domain.value_objects import FreshnessMetadata, PhoneDetails
 
 __all__ = [
-    # enums
     "CrawlStatus",
+    "CrawlTask",
     "DataSource",
-    "EntityType",
     "FreshnessAge",
+    "FreshnessMetadata",
+    "Lead",
     "LeadStatus",
+    "PhoneDetails",
     "PhoneType",
     "ProxyHealthState",
     "ResolutionStrategy",
-    # value objects
-    "Contact",
-    "FreshnessMetadata",
-    "GeoPoint",
-    "PhoneDetails",
-    # models
-    "BusinessRaw",
-    "CrawlTask",
-    "Lead",
-    "LeadAnalysis",
-    "ProposedService",
-    "ProxyNode",
-    "RawRecord",
-    "ResolvedEntity",
 ]

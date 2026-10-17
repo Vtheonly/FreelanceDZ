@@ -1,8 +1,8 @@
 """Value objects — small, immutable, self-validating domain concepts.
 
-A value object has no identity of its own: two ``PhoneDetails`` with the
-same E.164 number are interchangeable. They exist to give domain models
-richer typed fields instead of bare strings.
+PhoneDetails and FreshnessMetadata survive from v2 (they are well-designed
+and produced by phone_validator / freshness_detector). The unused GeoPoint
+and Contact value objects were removed in v3 (never instantiated anywhere).
 """
 
 from __future__ import annotations
@@ -35,14 +35,14 @@ class PhoneDetails(BaseModel):
     carrier: Optional[str] = Field(None, description="Mobile carrier (Mobilis/Djezzy/Ooredoo)")
     is_valid: bool = Field(default=False, description="Whether libphonenumber considers the number valid")
 
+    @property
+    def is_whatsapp_capable(self) -> bool:
+        """Algerian mobile prefixes (05/06/07) are WhatsApp-reachable in practice."""
+        return self.phone_type == PhoneType.MOBILE and self.is_valid
+
 
 class FreshnessMetadata(BaseModel):
-    """Temporal metadata attached to every discovered business.
-
-    The freshness detector fills this from HTTP headers, SERP snippets, and
-    on-page text. When no signal is found, ``calculated_age_class`` falls
-    back to ``FreshnessAge.ARCHIVED`` so the lead still appears in filters.
-    """
+    """Temporal metadata attached to every discovered business."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -64,22 +64,6 @@ class FreshnessMetadata(BaseModel):
         description="Coarse bucket computed from the available signals",
     )
 
-
-class GeoPoint(BaseModel):
-    """A WGS-84 geographic coordinate."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    latitude: float = Field(..., ge=-90.0, le=90.0)
-    longitude: float = Field(..., ge=-180.0, le=180.0)
-
-
-class Contact(BaseModel):
-    """A unified contact channel — phone, email, or social profile."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    kind: str = Field(..., description="phone | email | social")
-    value: str = Field(..., description="The contact value (E.164, email, or URL)")
-    source_url: Optional[str] = Field(None, description="URL where this contact was found")
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Extraction confidence 0..1")
+    @property
+    def age_class(self) -> str:
+        return self.calculated_age_class.value

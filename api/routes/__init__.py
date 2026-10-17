@@ -1,5 +1,5 @@
-"""API route blueprints — each module owns one resource family."""
+"""API route modules."""
 
-from api.routes import discovery, leads, entities, export, crawler, analytics, health
+from api.routes import leads, misc
 
-__all__ = ["discovery", "leads", "entities", "export", "crawler", "analytics", "health"]
+__all__ = ["leads", "misc"]
