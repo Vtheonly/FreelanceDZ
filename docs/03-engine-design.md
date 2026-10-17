@@ -19,6 +19,25 @@ query
   → incremental entity resolution (new records only)
 ```
 
+### Business Quality Gate (issue #8 — trusted directory tier)
+
+`utils/spam_filter.py` classifies sources in three tiers:
+
+1. **Trusted local directories** — Ouedkniss, CACI El Mouchir,
+   Pages Jaunes DZ. Their *profile* pages (store/company/fiche URLs)
+   pass the gate as structured business sources; their *search/index*
+   pages, homepages, result-wording titles, and non-business titles
+   stay blocked. Profile provenance is exposed via
+   `SourcingSpamFilter.is_trusted_directory(url)` so downstream code can
+   distinguish a directory profile from an ordinary website.
+2. **SEO aggregators & international directory giants** (Cybo,
+   YellowPages, TripAdvisor, annuaire-algerie, …) — always blocked.
+3. **Junk domains** (marketplaces, encyclopedias, media, gov/legal) —
+   always blocked; social platforms stay allowed (their business pages
+   are the prime "no website yet" segment and get deep-crawled).
+
+Hostless/malformed URLs are rejected like empty ones.
+
 Time-to-first-result is bound by the *fastest* source, not the sum of
 sequential variant searches (the v4 "dialect multiplier bomb").
 
