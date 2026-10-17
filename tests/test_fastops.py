@@ -32,6 +32,7 @@ from engine.fastops import (
     extract_html,
     levenshtein,
     score_batch,
+    score_batch_reference,
     trigram_jaccard,
 )
 
@@ -126,11 +127,13 @@ def test_score_batch_invariants():
     assert digitals[0] == 100
     assert 0.0 <= priorities[0] <= 100.0
 
-    # Nothing at all -> maximal deficit + both opportunity bonuses + min
-    # freshness: 22.5 + 15 + 10 + 2 = 49.5 (v4 Task 10 inverted scoring).
+    # Nothing at all (ghost record, issue #16): the opportunity bonuses are
+    # contactability-gated, so flags=0 earns ONLY deficit + min freshness:
+    # 22.5 + 2 = 24.5. (Pre-#16 it collected both bonuses too: 49.5 — the
+    # incentive defect where uncontactable snippets outranked real leads.)
     priorities, digitals = score_batch([0], [0], [4])
     assert digitals[0] == 10
-    assert priorities[0] == pytest.approx(22.5 + 25.0 + 2.0, abs=1e-6)
+    assert priorities[0] == pytest.approx(22.5 + 2.0, abs=1e-6)
 
     priorities, digitals = score_batch([], [], [])
     assert priorities == [] and digitals == []
@@ -172,6 +175,189 @@ def test_score_batch_length_consistency():
     assert len(priorities) == len(digitals) == 500
     assert all(0.0 <= p <= 100.0 for p in priorities)
     assert all(10 <= d <= 100 for d in digitals)
+
+
+# ---------------------------------------------------------------------------
+# Issue #16 — contactability gate + lookup-table batch parity
+# ---------------------------------------------------------------------------
+class TestIssue16GhostRecords:
+    """Ghost records must not achieve high scores from missing fields."""
+
+    def test_ghost_never_earns_opportunity_points(self):
+        # Every *reachable* flag word without a contact channel must score
+        # strictly below the v4 Task 10 acceptance bar of 60. Reachable =
+        # words channel_flags can actually produce (MOBILE/WHATSAPP imply
+        # PHONE; SSL implies WEBSITE).
+        def reachable(f: int) -> bool:
+            if f & FLAG_MOBILE and not f & FLAG_PHONE:
+                return False
+            if f & FLAG_WHATSAPP and not f & FLAG_PHONE:
+                return False
+            if f & FLAG_SSL and not f & FLAG_WEBSITE:
+                return False
+            return True
+
+        worst = 0.0
+        for f in range(512):
+            if f & (FLAG_PHONE | FLAG_EMAIL) or not reachable(f):
+                continue
+            for fb in range(5):
+                p, _ = score_batch([f], [0], [fb])
+                worst = max(worst, p[0])
+        assert worst < 60.0, f"non-contactable record scored {worst}"
+
+    def test_ghost_ceiling_is_deficit_plus_freshness_only(self):
+        # flags=0 with freshest bucket: 0 reach + 0 substance + 0 opportunity
+        # (gated) + 22.5 deficit + 15 freshness = 37.5 — the hard ceiling for
+        # a completely empty record.
+        p, d = score_batch([0], [0], [0])
+        assert p[0] == pytest.approx(37.5, abs=1e-9)
+        assert d[0] == 10
+
+    def test_contactable_no_website_still_gets_both_bonuses(self):
+        # The Task-10 prime prospect is untouched by the gate.
+        flags = FLAG_PHONE | FLAG_MOBILE | FLAG_WHATSAPP
+        p, _ = score_batch([flags], [0], [4])
+        assert p[0] >= 60.0
+        p, _ = score_batch([flags | FLAG_GEO | FLAG_ADDRESS], [0], [4])
+        # with address+geo the local-seo bonus disappears, build bonus stays
+        assert p[0] >= 45.0
+
+    def test_email_only_is_contactable(self):
+        # Email is a direct contact channel: qualifies for the bonuses.
+        p, d = score_batch([FLAG_EMAIL], [0], [4])
+        # reach 5 + opportunity 25 + deficit (100-20)*0.25=20 + freshness 2 = 52
+        assert p[0] == pytest.approx(5.0 + 25.0 + 20.0 + 2.0, abs=1e-6)
+        assert d[0] == 20
+
+    def test_social_only_record_gets_no_opportunity(self):
+        # A social page with no phone/email: real presence (social points)
+        # but not directly contactable — no opportunity bonuses.
+        p, d = score_batch([FLAG_SOCIAL], [1], [4])
+        # substance 5 + deficit (100-25)*0.25=18.75 + freshness 2 = 25.75
+        assert p[0] == pytest.approx(5.0 + 18.75 + 2.0, abs=1e-6)
+        assert d[0] == 25
+
+    def test_address_only_record_gets_no_opportunity(self):
+        p, _ = score_batch([FLAG_ADDRESS], [0], [4])
+        # substance 5 + deficit 21.25 + freshness 2 = 28.25 (no local-seo
+        # bonus: not contactable)
+        assert p[0] == pytest.approx(5.0 + 21.25 + 2.0, abs=1e-6)
+
+    def test_website_does_not_earn_build_opportunity_even_when_contactable(self):
+        flags = FLAG_PHONE | FLAG_WEBSITE
+        p, _ = score_batch([flags], [0], [4])
+        # reach 15 + substance 10 + local_seo 10 (contactable, no address/geo)
+        # + deficit (100-60)*0.25=10 + freshness 2 = 47 — and no build bonus.
+        assert p[0] == pytest.approx(15.0 + 10.0 + 10.0 + 10.0 + 2.0, abs=1e-6)
+
+
+class TestIssue16LUTParity:
+    """The 512-entry lookup-table batch path must be exactly the scalar oracle.
+
+    Exhaustive over the full flag space x social counts x freshness buckets
+    (including out-of-range freshness values clamped to the oldest bucket).
+    """
+
+    def test_exhaustive_flag_space_parity(self):
+        flags = list(range(512))
+        socials = [i % 6 for i in range(512)]        # 0..5 (past min(soc,2))
+        fresh = [i % 7 for i in range(512)]         # 0..6 (6 is invalid -> 4)
+        p_fast, d_fast = score_batch(flags, socials, fresh)
+        p_ref, d_ref = score_batch_reference(flags, socials, fresh)
+        assert p_fast == p_ref, "priority mismatch between LUT and oracle"
+        assert d_fast == d_ref, "digital mismatch between LUT and oracle"
+
+    def test_randomized_parity(self):
+        rng = random.Random(161)
+        for _ in range(20):
+            n = 500
+            flags = [rng.getrandbits(9) for _ in range(n)]
+            socials = [rng.randint(0, 255) for _ in range(n)]
+            fresh = [rng.randint(0, 9) for _ in range(n)]
+            assert score_batch(flags, socials, fresh) == score_batch_reference(flags, socials, fresh)
+
+    def test_default_argument_parity(self):
+        rng = random.Random(162)
+        flags = [rng.getrandbits(9) for _ in range(200)]
+        assert score_batch(flags) == score_batch_reference(flags)
+
+
+class TestIssue16ExplainMirrorsBatch:
+    """LeadScorer.explain must mirror the gated batch arithmetic factor-for-factor."""
+
+    def _score(self, lead):
+        from engine.scorer import LeadScorer
+
+        LeadScorer().score(lead)
+        return lead.priority_score, lead.score_breakdown
+
+    def test_ghost_lead_breakdown_has_no_opportunity_keys(self):
+        from domain.models import Lead
+
+        lead = Lead(name="Some Directory Listing", wilaya="Alger")
+        score, breakdown = self._score(lead)
+        assert "website_build_opportunity" not in breakdown
+        assert "local_seo_opportunity" not in breakdown
+        assert score <= 37.5
+
+    def test_phone_lead_keeps_both_opportunity_factors(self):
+        from domain.enums import PhoneType
+        from domain.models import Lead
+        from domain.value_objects import PhoneDetails
+
+        lead = Lead(name="Pharmacie Centrale", wilaya="Alger", phone="+213550123456")
+        lead.phone_details = [PhoneDetails(
+            original_string="0550 12 34 56", e164="+213550123456",
+            international="+213 550 12 34 56", national="0550 12 34 56",
+            phone_type=PhoneType.MOBILE, is_valid=True, is_whatsapp_capable=True,
+        )]
+        score, breakdown = self._score(lead)
+        assert breakdown["website_build_opportunity"] == 15.0
+        assert breakdown["local_seo_opportunity"] == 10.0
+        assert score >= 60.0  # the v4 Task 10 contract
+
+    def test_email_lead_keeps_both_opportunity_factors(self):
+        from domain.models import Lead
+
+        lead = Lead(name="Clinique El Nour", wilaya="Oran", email="contact@elnour.dz")
+        score, breakdown = self._score(lead)
+        assert breakdown["website_build_opportunity"] == 15.0
+        assert breakdown["local_seo_opportunity"] == 10.0
+
+    def test_explain_matches_score_batch_across_flag_grid(self):
+        """For every flag word, explain()'s factor sum equals the batch score."""
+        from domain.models import Lead
+
+        # Build a lead per flag word via field-level controls, then compare
+        # explain-sum against a direct score_batch call with the same flags.
+        from engine.scorer import LeadScorer, channel_flags
+
+        scorer = LeadScorer()
+        rng = random.Random(163)
+        for _ in range(300):
+            lead = Lead(name=f"Biz {rng.randint(0, 9999)}", wilaya="Alger")
+            if rng.random() < 0.5:
+                lead.phone = "+213550123456"
+            if rng.random() < 0.4:
+                lead.email = "contact@biz.dz"
+            if rng.random() < 0.5:
+                lead.website = "https://biz.dz" if rng.random() < 0.7 else "http://biz.dz"
+            if rng.random() < 0.4:
+                lead.social_links = ["https://facebook.com/x"]
+            if rng.random() < 0.4:
+                lead.address = "12 Rue de la Paix, Alger"
+            if rng.random() < 0.3:
+                lead.latitude, lead.longitude = 36.75, 3.05
+
+            scorer.score(lead)
+            flags = channel_flags(lead)
+            p_batch, _ = score_batch([flags], [min(len(lead.social_links), 255)], [4])
+            # explain's factor sum must reproduce the batch priority exactly
+            # (same arithmetic, single source of truth).
+            assert lead.priority_score == round(p_batch[0], 1), (
+                f"explain/batch divergence: {lead.score_breakdown} vs {p_batch[0]}"
+            )
 
 
 # ---------------------------------------------------------------------------

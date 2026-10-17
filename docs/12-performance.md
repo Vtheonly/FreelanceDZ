@@ -16,6 +16,7 @@ tests live in `tests/test_performance.py`.
 |---|---|---|---|
 | HTML structural extraction (11 KB page) | 989/s (BS4 fallback) | **9,117/s** (regex scan) | **9.2× faster** |
 | Batch scoring (50k leads) | 1,121,248/s | 978,256/s | −13% (adds the Task-10 opportunity arithmetic; both ≫ workload) |
+| Batch scoring, 100k flags (issue #16) | 943,656/s (scalar oracle) | **3,457,148/s** (512-entry LUT) | **3.66×** like-for-like (identical gated semantics), exact parity with the oracle |
 | Upsert, sequential ×500 | 1,005/s | 877/s | −13% (ON CONFLICT + BEGIN IMMEDIATE — the price of race-freedom) |
 | Upsert, 50 concurrent same-lead | 1 id, 0 exceptions* | 1 id, 0 exceptions | *see honesty note |
 | Point-in-wilaya lookup | — | **39,627/s** (59% hit-rate on uniform bbox points) | new capability |
@@ -57,6 +58,19 @@ tests live in `tests/test_performance.py`.
 - **Scoring −13%**: the new arithmetic adds two opportunity checks per
   lead (the v4 Task 10 requirement). At ~1M leads/s, irrelevant in
   practice.
+- **Scoring LUT (issue #16)**: the 9 channel flags span exactly 512
+  words, so every flag-derived component is precomputed at import into
+  `_SCORE_LUT` and the batch loop is one list index per lead. Measured
+  on the dev sandbox (Python 3.12.15, Linux, best-of-5, official
+  harness `python cli.py bench`, 100k random flag words): LUT path
+  3,457,148/s vs 943,656/s for the branch-by-branch scalar oracle with
+  identical gated semantics — **3.66×**. (The pre-#16 ungated loop
+  measured ~990k/s; its semantics differed — no contactability gate.)
+  A numpy vectorization of the same arithmetic measured **26.8M rec/s**
+  but was **rejected**: it would add numpy to the engine's dependency
+  footprint for a workload (discovery campaigns + rescoring, tens to
+  hundreds of leads at a time) that 3.4M rec/s already exceeds by three
+  orders of magnitude. Right-sizing over raw speed.
 
 ## Streamlit rerun economy
 

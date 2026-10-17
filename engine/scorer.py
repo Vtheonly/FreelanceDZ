@@ -5,14 +5,18 @@ Factor weights are domain rules (justified constants, not runtime config):
     substance     <= 25   website 10, social 5, address 5, geo 5
     opportunity   <= 25   website_build 15, local_seo 10 (v4 Task 10 —
                           absence of digital presence is a sales lead, not
-                          a penalty: a reachable business with no website
-                          and no map pin is the best web-design prospect)
+                          a penalty). Issue #16: both bonuses are gated on
+                          contactability — a phone number or email — so
+                          ghost records with no contact channel cannot
+                          earn opportunity points from missing fields
+                          alone.
     deficit       <= 25   (100 - digital_score) * 0.25  (inverse opportunity)
     freshness     <= 15   hour 15, day 10, week 7, month 4, older 2
 
 The arithmetic lives in ``engine.fastops.score_batch`` — the single
 source of truth shared by the single-lead and batch paths (asserted by
-tests/test_fastops.py).
+tests/test_fastops.py). ``LeadScorer.explain`` mirrors the same factors
+one-for-one, including the contactability gate.
 """
 
 from __future__ import annotations
@@ -119,11 +123,15 @@ class LeadScorer:
 
         # v4 Task 10 — inverted map/web-absence scoring: award the missing-
         # presence opportunity instead of burying offline businesses.
-        if not lead.website:
+        # Issue #16 — gate both bonuses on contactability (phone or email):
+        # an uncontactable record is not a sales opportunity, whatever it
+        # lacks. Mirrors FLAG_CONTACTABLE in engine.fastops exactly.
+        contactable = bool(lead.phone or lead.email)
+        has_address = bool(lead.address and len(lead.address) > 5)
+        has_geo = lead.latitude is not None and lead.longitude is not None
+        if contactable and not lead.website:
             factors["website_build_opportunity"] = WEIGHTS["website_build_opportunity"]
-        if not (lead.address and len(lead.address) > 5) and (
-            lead.latitude is None or lead.longitude is None
-        ):
+        if contactable and not has_address and not has_geo:
             factors["local_seo_opportunity"] = WEIGHTS["local_seo_opportunity"]
 
         digital = getattr(lead, "digital_score", None)

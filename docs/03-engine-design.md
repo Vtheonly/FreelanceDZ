@@ -54,9 +54,12 @@ proceeds regardless.
 switches in a local metasearch: clean aggregated JSON, no DDG anti-bot
 limits. Empty = disabled; DDG remains the default source.
 
-## Scoring (v4 Task 10 — inverted opportunity model)
+## Scoring (v4 Task 10 — inverted opportunity model, issue #16 contactability gate)
 
-Single arithmetic source of truth: `engine/fastops.score_batch`.
+Single arithmetic source of truth: `engine/fastops.score_batch` (a
+512-entry precomputed lookup table over the 9 channel-flag bits,
+parity-tested exhaustively against the scalar oracle
+`score_batch_reference`).
 
 ```
 priority = reach (≤35) + substance (≤25) + opportunity (≤25)
@@ -69,11 +72,26 @@ priority = reach (≤35) + substance (≤25) + opportunity (≤25)
   `website_build_opportunity`; no address AND no GPS → +10
   `local_seo_opportunity`. A reachable business with no web presence is
   the prime web-design prospect, so absence *raises* the score.
-- Acceptance: a verified-phone lead with no website and no map pin scores
-  ≥ 60 (`tests/test_v4_refactor.py::TestTask10OpportunityScoring`).
+- **contactability gate (issue #16)**: both opportunity bonuses are
+  awarded only when the lead has a direct contact channel (phone or
+  email). Ghost records — spam snippets and uncontactable listings
+  with neither — previously collected up to 62.5 points from missing
+  fields alone and could outrank real prospects; their hard ceiling is
+  now 37.5 (deficit + best freshness, zero opportunity points).
+- Acceptance: a verified-phone lead with no website and no map pin
+  still scores ≥ 60 (`tests/test_v4_refactor.py::TestTask10OpportunityScoring`);
+  every reachable non-contactable flag combination scores < 60
+  (`tests/test_fastops.py::TestIssue16GhostRecords`).
 
 `digital_score` (the audit "health" column) mirrors `engine/analyzer.py`'s
-deterministic audit and is untouched by the opportunity factors.
+deterministic audit and is untouched by the opportunity factors or the gate.
+
+**Compatibility note:** `score_breakdown` is persisted per lead; rows
+scored before issue #16 may still contain opportunity factors for
+uncontactable leads until re-scored (`POST /api/v2/leads/{id}/analyze`
+or `POST /api/v2/leads/score-all`). The gate changes only the two
+opportunity factors — reach, substance, deficit, freshness, and
+digital_score arithmetic are unchanged.
 
 ## Entity resolution (v3.1 pipeline, unchanged semantics)
 

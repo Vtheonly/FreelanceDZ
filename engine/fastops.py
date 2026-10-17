@@ -18,7 +18,12 @@ Every function here has semantics covered by tests (formerly
 ``test_native_parity``; now ``test_fastops``). The scoring arithmetic is
 the single source of truth for both ``LeadScorer`` and the batch path —
 including the v4 Task 10 opportunity inversion: absence of web presence
-is a *sales opportunity*, not a penalty.
+is a *sales opportunity*, not a penalty. Since issue #16 the two
+opportunity bonuses are **gated on contactability** (a phone number or
+an email address): a record with no way to reach the business can no
+longer collect opportunity points from missing fields alone — ghost
+records (spam snippets, uncontactable listings) used to score up to
+62.5 with zero substance.
 """
 
 from __future__ import annotations
@@ -49,6 +54,8 @@ FLAG_GEO = 1 << 8
 # v4 Task 10 — opportunity weights (conflict with refactorv5 Step 8's
 # 10/5 resolved in favour of v4's numbers: its acceptance test — "verified
 # phone, no website, no map pin -> score >= 60" — only passes with these).
+# Issue #16: the two opportunity bonuses are awarded only to *contactable*
+# leads (phone or email present) — see the gate in score_batch.
 WEIGHTS = {
     "phone_present": 15.0,
     "mobile_direct": 10.0,
@@ -196,6 +203,82 @@ def extract_html(html: bytes | str) -> ExtractionResult:
 # ---------------------------------------------------------------------------
 # Scoring (SoA batch) — the single arithmetic source of truth
 # ---------------------------------------------------------------------------
+# Contactability gate (issue #16): opportunity bonuses require a direct
+# contact channel. Stored as a flag mask so both the batch path and
+# LeadScorer.explain can share the exact same definition.
+FLAG_CONTACTABLE = FLAG_PHONE | FLAG_EMAIL
+
+
+def _flag_sums(flags: int) -> tuple[float, int, bool]:
+    """Scalar reference for the flag-derived scoring components.
+
+    Returns ``(reach + substance + opportunity, digital_health_without_the
+    social_count_bonus, has_social_flag)``. This is the exhaustive oracle the
+    lookup-table batch path is parity-tested against (tests/test_fastops.py)
+    and the definition LeadScorer.explain mirrors factor-by-factor.
+    """
+    health = 10
+    if flags & FLAG_WEBSITE:
+        health += 35
+        if flags & FLAG_SSL:
+            health += 10
+    if flags & FLAG_PHONE:
+        health += 15
+    if flags & FLAG_EMAIL:
+        health += 10
+    if flags & FLAG_ADDRESS:
+        health += 5
+    # The social bonus (10 + min(count, 2) * 5) is added by the caller
+    # because it depends on the per-lead social count.
+
+    reach = 0.0
+    if flags & FLAG_PHONE:
+        reach += 15.0
+    if flags & FLAG_MOBILE:
+        reach += 10.0
+    if flags & FLAG_WHATSAPP:
+        reach += 5.0
+    if flags & FLAG_EMAIL:
+        reach += 5.0
+
+    substance = 0.0
+    if flags & FLAG_WEBSITE:
+        substance += 10.0
+    if flags & FLAG_SOCIAL:
+        substance += 5.0
+    if flags & FLAG_ADDRESS:
+        substance += 5.0
+    if flags & FLAG_GEO:
+        substance += 5.0
+
+    # v4 Task 10 — absence is opportunity, not penalty; issue #16 — but
+    # only for businesses we can actually reach (phone or email).
+    opportunity = 0.0
+    contactable = bool(flags & FLAG_CONTACTABLE)
+    if contactable and not flags & FLAG_WEBSITE:
+        opportunity += WEIGHTS["website_build_opportunity"]
+    if contactable and not flags & FLAG_ADDRESS and not flags & FLAG_GEO:
+        opportunity += WEIGHTS["local_seo_opportunity"]
+
+    return reach + substance + opportunity, health, bool(flags & FLAG_SOCIAL)
+
+
+# The channel flags are a 9-bit word (512 combinations). Every flag-derived
+# score component is therefore a pure function of a small integer — so the
+# whole space is precomputed once at import into a flat lookup table and the
+# batch loop collapses to one list index per lead (issue #16's measured
+# hot-path optimization: official harness `python cli.py bench`, 100k flags
+# — 3,457,148/s LUT vs 943,656/s for the scalar oracle with identical
+# gated semantics, i.e. 3.66x, zero new dependencies, zero per-lead
+# allocations; a numpy variant measured 26.8M rec/s but was rejected —
+# see docs/12-performance.md). Exhaustive parity with the scalar oracle is
+# asserted in tests/test_fastops.py::TestIssue16LUTParity. The table covers
+# exactly the 9 channel flags; a future 10th flag must extend it (an
+# out-of-range flag word raises IndexError here rather than scoring
+# wrongly in silence).
+_SCORE_LUT: list[tuple[float, int, bool]] = [_flag_sums(f) for f in range(512)]
+
+
 def score_batch(
     flags: list[int],
     social_counts: list[int] | None = None,
@@ -204,9 +287,49 @@ def score_batch(
     """Batch channel-flag scoring (SoA layout, one pass, no per-lead calls).
 
     Digital health mirrors ``BusinessAnalyzer``'s audit arithmetic; the
-    priority score is reach + substance + deficit + freshness + *opportunity*
-    (v4 Task 10: no website -> website_build_opportunity; no address AND no
-    GPS -> local_seo_opportunity), capped at 100.
+    priority score is reach + substance + opportunity + deficit +
+    freshness, capped at 100. The v4 Task 10 opportunity bonuses (no
+    website; no address AND no GPS) apply only to contactable leads
+    (phone or email) — issue #16's ghost-record fix. Semantics are
+    identical to ``_flag_sums`` (the scalar oracle); only the cost model
+    differs (precomputed 512-entry lookup table).
+    """
+    n = len(flags)
+    if n == 0:
+        return [], []
+    socials = social_counts if social_counts is not None else [0] * n
+    fresh = freshness_buckets if freshness_buckets is not None else [4] * n
+
+    priorities: list[float] = []
+    digitals: list[int] = []
+    lut = _SCORE_LUT
+    fresh_points = FRESHNESS_POINTS
+    priorities_append = priorities.append
+    digitals_append = digitals.append
+
+    for f, soc, fb in zip(flags, socials, fresh):
+        rsop, health, has_social = lut[f]
+        if has_social:
+            health += 10 + (soc if soc < 2 else 2) * 5
+        if health > 100:
+            health = 100
+        deficit = (100.0 - health) * WEIGHTS["deficit_multiplier"]
+        total = rsop + deficit + fresh_points[fb if 0 <= fb < 5 else 4]
+        priorities_append(total if total < 100.0 else 100.0)
+        digitals_append(health)
+    return priorities, digitals
+
+
+def score_batch_reference(
+    flags: list[int],
+    social_counts: list[int] | None = None,
+    freshness_buckets: list[int] | None = None,
+) -> tuple[list[float], list[int]]:
+    """Exhaustive scalar twin of ``score_batch`` (the test oracle).
+
+    Branch-by-branch evaluation of every factor — kept as a permanent
+    reference implementation so parity is an assertion, not an assumption
+    (issue #16: "keep an exhaustive scorer as a test oracle").
     """
     n = len(flags)
     if n == 0:
@@ -217,51 +340,12 @@ def score_batch(
     priorities: list[float] = []
     digitals: list[int] = []
     for f, soc, fb in zip(flags, socials, fresh):
-        health = 10
-        if f & FLAG_WEBSITE:
-            health += 35
-            if f & FLAG_SSL:
-                health += 10
-        if f & FLAG_PHONE:
-            health += 15
-        if f & FLAG_EMAIL:
-            health += 10
-        if f & FLAG_SOCIAL:
-            health += 10 + min(soc, 2) * 5
-        if f & FLAG_ADDRESS:
-            health += 5
-        health = min(100, health)
-
-        reach = 0.0
-        if f & FLAG_PHONE:
-            reach += 15.0
-        if f & FLAG_MOBILE:
-            reach += 10.0
-        if f & FLAG_WHATSAPP:
-            reach += 5.0
-        if f & FLAG_EMAIL:
-            reach += 5.0
-
-        substance = 0.0
-        if f & FLAG_WEBSITE:
-            substance += 10.0
-        if f & FLAG_SOCIAL:
-            substance += 5.0
-        if f & FLAG_ADDRESS:
-            substance += 5.0
-        if f & FLAG_GEO:
-            substance += 5.0
-
-        # v4 Task 10 — absence is opportunity, not penalty.
-        opportunity = 0.0
-        if not f & FLAG_WEBSITE:
-            opportunity += WEIGHTS["website_build_opportunity"]
-        if not f & FLAG_ADDRESS and not f & FLAG_GEO:
-            opportunity += WEIGHTS["local_seo_opportunity"]
-
+        rsop, health, has_social = _flag_sums(f)
+        if has_social:
+            health = min(100, health + 10 + min(soc, 2) * 5)
         deficit = (100.0 - health) * WEIGHTS["deficit_multiplier"]
         fb_idx = fb if 0 <= fb < 5 else 4
-        total = reach + substance + opportunity + deficit + FRESHNESS_POINTS[fb_idx]
+        total = rsop + deficit + FRESHNESS_POINTS[fb_idx]
         priorities.append(min(100.0, total))
         digitals.append(health)
     return priorities, digitals

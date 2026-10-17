@@ -116,6 +116,8 @@ def bench_entity_resolution(n_leads: int = 4000) -> None:
 
 
 def bench_scoring(n_leads: int = 100_000) -> None:
+    from engine.fastops import score_batch_reference
+
     rng = random.Random(3)
     flags = [rng.getrandbits(9) for _ in range(n_leads)]
     socials = [rng.randint(0, 3) for _ in range(n_leads)]
@@ -125,7 +127,12 @@ def bench_scoring(n_leads: int = 100_000) -> None:
     print(f"  [v2-style     : per-lead calls]            {_fmt_rate(5000, t)}")
 
     t = _bench(lambda: score_batch(flags, socials, fresh))
-    print(f"  [v4 fastops   : SoA batch scoring]         {_fmt_rate(n_leads, t)}")
+    print(f"  [v4 fastops   : SoA batch (512-LUT)]       {_fmt_rate(n_leads, t)}")
+
+    # The scalar oracle (identical semantics, branch-by-branch) — the
+    # parity baseline for the lookup-table path (issue #16).
+    t = _bench(lambda: score_batch_reference(flags, socials, fresh))
+    print(f"  [oracle       : SoA batch (scalar)]        {_fmt_rate(n_leads, t)}")
 
 
 def bench_url_dedup(n_urls: int = 1_000_000) -> None:
